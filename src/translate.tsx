@@ -13,16 +13,16 @@ import { useEffect, useState } from "react";
 import { DEFAULT_MODEL, translate } from "./providers";
 import type { TranslateOptions, TranslateResult } from "./providers/types";
 import {
-  TranslateError,
-  type TranslateErrorKind,
-  asTranslateError,
+  ProviderError,
+  type ProviderErrorKind,
+  asProviderError,
 } from "./lib/errors";
 
 const API_KEY_URL = "https://aistudio.google.com/app/apikey";
 
 /** Resolve preferences (manifest -> raycast-env.d.ts) into core options. */
 function resolveOptions(): TranslateOptions {
-  const prefs = getPreferenceValues<Preferences>();
+  const prefs = getPreferenceValues<Preferences.Translate>();
   return {
     apiKey: (prefs.apiKey ?? "").trim(),
     model: (prefs.model ?? "").trim() || DEFAULT_MODEL,
@@ -44,7 +44,7 @@ function defangImages(markdown: string): string {
 type ViewState =
   | { status: "loading" }
   | { status: "ok"; result: TranslateResult }
-  | { status: "error"; error: TranslateError };
+  | { status: "error"; error: ProviderError };
 
 function composeResult(result: TranslateResult): string {
   return result.explanation
@@ -52,7 +52,7 @@ function composeResult(result: TranslateResult): string {
     : result.translation;
 }
 
-function errorTitle(error: TranslateError): string {
+function errorTitle(error: ProviderError): string {
   switch (error.kind) {
     case "empty":
       return "Empty input";
@@ -71,7 +71,7 @@ function errorTitle(error: TranslateError): string {
   }
 }
 
-const ERROR_HINTS: Record<TranslateErrorKind, string> = {
+const ERROR_HINTS: Record<ProviderErrorKind, string> = {
   empty: "Enter some text and try again.",
   auth: `A Gemini API key is required — it's **free**: get one at [aistudio.google.com](${API_KEY_URL}) (Get API key) and paste it into the extension preferences.`,
   rateLimit: "Too many requests. Wait a few seconds and try again.",
@@ -82,7 +82,7 @@ const ERROR_HINTS: Record<TranslateErrorKind, string> = {
   api: "Gemini returned an error. Details below.",
 };
 
-function errorMarkdown(error: TranslateError): string {
+function errorMarkdown(error: ProviderError): string {
   const lines = [`# ⚠️ ${errorTitle(error)}`, "", ERROR_HINTS[error.kind]];
   // Only the generic "api" kind carries extra info beyond the hint (the HTTP status).
   if (error.kind === "api") {
@@ -113,7 +113,7 @@ function ResultView({ input }: { input: string }) {
         if (cancelled) {
           return;
         }
-        const error = asTranslateError(raw);
+        const error = asProviderError(raw);
         setState({ status: "error", error });
         void showFailureToast(error, { title: errorTitle(error) });
       }

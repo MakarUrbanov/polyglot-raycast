@@ -1,12 +1,19 @@
-# Polyglot — a bilingual translator for Raycast
+# Polyglot — a bilingual translator & proofreader for Raycast
 
-A RU⇄EN translator that **figures out the direction itself** and, when useful, adds a
-learning breakdown. There is no "target language" to pick: type Russian and you get English,
-type English and you get Russian. Below the translation, **when it helps**, an explanation
-block appears (meanings, idioms, false friends, grammar) — turning a plain translator into a
-study tool.
+Three commands, all on **Google Gemini** (free tier — the key is free, see below):
 
-Runs on **Google Gemini** (free tier — the key is free, see below).
+1. **Translate** — a RU⇄EN translator that **figures out the direction itself** and, when
+   useful, adds a learning breakdown. No "target language" to pick: type Russian and you get
+   English, type English and you get Russian. Below the translation, **when it helps**, an
+   explanation block appears (meanings, idioms, false friends, grammar) — a plain translator
+   turned study tool.
+2. **Proofread** — fix grammar, spelling and punctuation in the **selected text, in place**,
+   keeping your wording and tone. For Slack / Teams / chat.
+3. **Proofread Formal** — the same, but also rewrites the text into a polished formal
+   register. For a corporate email.
+
+The two Proofread commands are **no-view**: you assign a hotkey, select text in any app, press
+it, and the corrected text lands back where the selection was — no window opens.
 
 > 📸 _Screenshot: drop `metadata/translate.png` here after the first run
 > (`npm run dev` → run the command → screenshot the result window)._
@@ -20,6 +27,43 @@ Runs on **Google Gemini** (free tier — the key is free, see below).
 - **Conditional explanation block.** Plain, unambiguous sentences get no block (no noise);
   polysemous words, idioms, phrasal verbs, slang, jargon and genuinely ambiguous phrases get
   one that explains exactly the tricky spots (see [below](#the-explanation-block)).
+
+## Proofread — in place
+
+The **Proofread** and **Proofread Formal** commands correct the **currently selected text**
+without opening a window — the whole interaction is a single HUD line.
+
+- **Assign a hotkey.** These commands are only useful on a hotkey: Raycast → Extensions →
+  **Polyglot → Proofread** (and **Proofread Formal**) → *Record Hotkey*. Pick two shortcuts you
+  can hit while editing anywhere.
+- **Casual vs formal.** *Proofread* fixes grammar, spelling and punctuation while keeping your
+  exact wording, tone and register (lowercase sentence starts, missing final period, slang and
+  emoji are all left alone). *Proofread Formal* also rewrites the text into a polished formal
+  register — it may swap casual words for formal ones and tighten phrasing, but keeps your
+  meaning and adds nothing.
+- **Paste-back vs clipboard.** If text is selected, the result is **pasted straight over the
+  selection**. If nothing is selected, Polyglot falls back to the **clipboard**: it proofreads
+  the clipboard contents and copies the result back for you to paste. Surrounding whitespace of
+  the selection (leading/trailing spaces and newlines) is preserved.
+- **10 000-character guard.** Selections longer than ~10k characters are refused with a HUD
+  warning and no model call — so a truncated response can never be pasted over a big selection.
+
+### Mixed-language input
+
+The proofreader detects the **dominant** language and works in it — it **never translates the
+whole text**. But an inline fragment written in another language (you blanked on a word and
+dropped in your native one mid-sentence) is folded into the dominant language:
+
+> `please отправить me the report` → `please send me the report`
+
+Protected terms — brands, code, CLI commands, URLs, versions — are always kept verbatim.
+
+**Honest limitation.** The line between "a foreign fragment to translate" and "a loanword to
+keep" is inherently fuzzy. Loanwords written in the dominant language's own alphabet are meant
+to stay (in Russian, «ресёрч», «запушь», «пофиксить» are kept, not turned back into
+`research` / `push` / `fix`), and the tie-breaker is *everyday word → translate, jargon / tool /
+brand → keep*. On genuinely ambiguous tokens the model can still guess wrong; if it does,
+undo and re-select a tighter range.
 
 ## Requirements
 
@@ -46,12 +90,14 @@ npm install
 npm run dev
 ```
 
-`npm run dev` builds the extension and registers the **Translate** command in your running
-Raycast (with hot reload). Find it in Raycast by searching `Translate` or `Polyglot`.
+`npm run dev` builds the extension and registers all three commands — **Translate**,
+**Proofread**, **Proofread Formal** — in your running Raycast (with hot reload). Find them in
+Raycast by searching `Translate`, `Proofread`, or `Polyglot`.
 
-- Assign a global hotkey: Raycast → Extensions → **Polyglot → Translate** → *Record Hotkey*.
-- Open the command's preferences (in Raycast: select the command and press `⌘ ,`, or use
-  *Open Extension Preferences* / *Get a Free Key* right from the error screen) and paste the key.
+- Assign a global hotkey: Raycast → Extensions → **Polyglot → <command>** → *Record Hotkey*.
+  The Proofread commands are really only useful on a hotkey (select text, press, done).
+- Open preferences (in Raycast: select a command and press `⌘ ,`, or use *Open Extension
+  Preferences* / *Get a Free Key* right from the error screen) and paste the key.
 
 When you're done, you can stop `npm run dev` (`Ctrl-C`) — the **extension stays installed** in
 Raycast as a local one.
@@ -65,15 +111,26 @@ working. That is exactly the mode you want for a personal tool.
 
 ## Preferences
 
-All settings are standard Raycast preferences (the key is stored in Raycast's secure storage):
+All settings are standard Raycast preferences (the key is stored in Raycast's secure storage).
+They are split into **global** settings (shared by every command) and settings **specific to
+the Translate command**.
+
+**Global** (apply to all three commands):
 
 | Setting | Type | Default | Purpose |
 |---|---|---|---|
 | **Gemini API Key** | password | — | Free key — [aistudio.google.com](https://aistudio.google.com/app/apikey). |
 | **Gemini Model** | text | `gemini-2.5-flash` | Gemini model ID. |
+
+**Translate command only** (Raycast shows these on the Translate command's own settings, not
+the extension-wide ones):
+
+| Setting | Type | Default | Purpose |
+|---|---|---|---|
 | **Explanation Language** | text | `Russian` | Language of the explanation block (any: `English`, `German`, …). |
 | **Always Explain** | checkbox | `off` | Force the block even for simple phrases. |
 
+The Proofread commands add no preferences of their own — they use the global key and model.
 The model is just a string ID, so when a new version ships you change the preference without
 touching code. Free-tier models: `gemini-2.5-flash` (default), `gemini-2.5-flash-lite`,
 `gemini-3.5-flash` (more capable, but noticeably pricier on the paid tier).
@@ -100,51 +157,69 @@ The **Always Explain** checkbox forces a block even on simple phrases.
 
 ## Testing the logic without the UI (eval harness)
 
-The translation/block logic (the main risk) is validated **headless**, bypassing the Raycast
-modal — the core `translate()` is called directly, with the key from an env var:
+The prompt logic (the main risk) is validated **headless**, bypassing the Raycast modal — the
+core `translate()` / `proofread()` are called directly, with the key from an env var. There are
+two suites: `translate` and `proofread`.
 
 ```bash
-# all 10 test cases
+# both suites, every case
 GEMINI_API_KEY=... npm run eval
 
-# a specific case / block language / model
-GEMINI_API_KEY=... npm run eval -- --case 1
-GEMINI_API_KEY=... npm run eval -- --lang English
+# one suite
+GEMINI_API_KEY=... npm run eval -- --suite translate     # reproduces the old behavior exactly
+GEMINI_API_KEY=... npm run eval -- --suite proofread
+
+# proofread in formal mode (enables the formal-only case 9, skips casual-only cases)
+GEMINI_API_KEY=... npm run eval -- --suite proofread --formal
+
+# a specific case within the selected suite(s)
+GEMINI_API_KEY=... npm run eval -- --suite translate --case 6
+GEMINI_API_KEY=... npm run eval -- --lang English        # translate block language
 GEMINI_API_KEY=... npm run eval -- --model gemini-2.5-flash-lite
 
-npm run eval -- --list      # list the cases
-npm run eval -- --case 8    # "empty key" — works without a key
-npm run eval -- --help      # all flags
+npm run eval -- --list                       # list both suites
+npm run eval -- --suite proofread --case 11  # "empty key" — works without a key
+npm run eval -- --help                       # all flags
 ```
 
-Cases 4 / 6 / 8 are auto-checked (block absent / terms kept / auth error); the rest are printed
-for eyeballing. Env key: `GEMINI_API_KEY`.
+Some cases carry a programmatic auto-check (translate: block absent / terms kept / auth error;
+proofread: informal register kept, no trailing period, stays in the source language, foreign
+fragment folded in, loanword kept, protected terms kept, auth error); the rest are printed for
+eyeballing. Without a key only the empty-key cases run — the rest are `SKIP`. Env key:
+`GEMINI_API_KEY`.
 
 ## Architecture
 
 ```
 src/
-  translate.tsx        # the only file that imports @raycast/api: Form → Detail
-  prompt.ts            # system prompt: the flip, term protection, block rules
+  translate.tsx        # Translate command (view): the file that imports @raycast/api — Form → Detail
+  proofread.tsx        # Proofread command (no-view): runProofread(false)
+  proofread-formal.tsx # Proofread Formal command (no-view): runProofread(true)
+  run-proofread.ts     # no-view runner: selection → clipboard fallback, whitespace, HUD, errors
+  prompts/
+    translate.ts       # translate system prompt: the flip, term protection, block rules
+    proofread.ts       # proofread system prompt: monolingual guard, fragments, style, output
+    shared.ts          # shared protected-terms block + <input> fencing helper
   providers/
-    index.ts           # translate() entry point + default model
-    types.ts           # TranslateOptions / TranslateResult
-    gemini.ts          # Gemini generateContent (responseMimeType json, key in header)
+    index.ts           # translate() / proofread() entry points + default model
+    types.ts           # Base/Translate/Proofread Options + Results
+    gemini.ts          # Gemini generateContent (shared callGemini; JSON vs plain-text config)
   lib/
     http.ts            # postJson: timeout (AbortController) + status mapping
-    parse.ts           # defensive JSON parsing with a fallback
-    errors.ts          # TranslateError discriminated by kind
+    parse.ts           # defensive parsing (translate JSON + proofread fence/quote stripping)
+    errors.ts          # ProviderError discriminated by kind
 scripts/
-  eval.ts              # headless test-case runner
+  eval.ts              # headless test-case runner (translate + proofread suites)
 ```
 
-The key point: the **core (`prompt`/`providers`/`lib`) does not depend on `@raycast/api`** —
-the provider receives `apiKey`/`model` as explicit arguments (DI). The same `translate()` runs
-in both the UI and the eval harness. The translation and the block come back in **one request**
-as `{ translation, explanation | null }`; parsing is resilient to model misbehavior (strips
-``` fences, extracts the first JSON object, falls back to raw text). No streaming — one request,
-wait for the full response. The `gemini.ts` layer is kept as a seam: re-adding other providers
-means restoring their modules from git history and adding a dispatcher.
+The key point: the **core (`prompts`/`providers`/`lib`) does not depend on `@raycast/api`** —
+the provider receives `apiKey`/`model` as explicit arguments (DI). The same `translate()` /
+`proofread()` run in both the UI and the eval harness. Translate returns
+`{ translation, explanation | null }` in **one request**; proofread returns `{ text }`. Parsing
+is resilient to model misbehavior (strips ``` fences, extracts the first JSON object or strips
+wrapping quotes, falls back to raw text). No streaming — one request, wait for the full
+response. The `gemini.ts` layer is kept as a seam: re-adding other providers means restoring
+their modules from git history and adding a dispatcher.
 
 ## Security notes
 
