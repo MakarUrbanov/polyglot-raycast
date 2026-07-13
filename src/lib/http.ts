@@ -3,7 +3,7 @@
  * used in error messages (e.g. "Gemini").
  */
 
-import { TranslateError, errorFromStatus } from "./errors";
+import { ProviderError, errorFromStatus } from "./errors";
 
 export interface PostJsonArgs {
   url: string;
@@ -59,13 +59,13 @@ export async function postJson(args: PostJsonArgs): Promise<unknown> {
         throw cause; // external cancellation — the caller ignores it
       }
       if (timeoutController.signal.aborted) {
-        throw new TranslateError(
+        throw new ProviderError(
           "timeout",
           `Request to ${label} timed out (${timeoutMs} ms).`,
           { cause },
         );
       }
-      throw new TranslateError(
+      throw new ProviderError(
         "network",
         `Could not reach ${label}. Check your connection.`,
         { cause },
@@ -80,7 +80,7 @@ export async function postJson(args: PostJsonArgs): Promise<unknown> {
     try {
       return await response.json();
     } catch (cause) {
-      throw new TranslateError(
+      throw new ProviderError(
         "parse",
         `${label} returned a non-JSON response body.`,
         { cause },

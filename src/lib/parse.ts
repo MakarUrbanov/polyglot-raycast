@@ -1,19 +1,66 @@
 /**
- * Defensive parsing of the model's JSON output with a fallback.
+ * Defensive parsing of the model's output for both flows.
  *
- * The model is asked to return strictly {"translation": string, "explanation": string|null}
- * with no preamble and no ``` fences. Models misbehave, so we:
- *   1) strip code fences;
- *   2) try JSON.parse;
- *   3) try to extract the first brace-balanced {...};
- *   4) fall back to: whole text = translation, explanation = null (spec §3).
+ * Translate: the model is asked for strictly {"translation": string,
+ * "explanation": string|null} with no preamble and no ``` fences. Models
+ * misbehave, so we strip fences, try JSON.parse, try to extract the first
+ * brace-balanced {...}, then fall back to: whole text = translation,
+ * explanation = null.
+ *
+ * Proofread: the model is asked for the corrected text ONLY — plain text, no
+ * JSON, no notes, no fences. Models still occasionally wrap it in fences or
+ * quotes, so we strip those before handing the text back.
  */
 
-import type { TranslateResult } from "../providers/types";
+import { ProviderError } from "./errors";
+import type { ProofreadResult, TranslateResult } from "../providers/types";
 
+/** Strip a single wrapping ```/```json code fence if the model added one. */
 function stripCodeFences(text: string): string {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   return (fenced ? fenced[1] : text).trim();
+}
+
+/**
+ * Strip a fence ONLY when it wraps the entire output. The proofread result may
+ * legitimately contain code blocks from the user's own text, so matching a
+ * fence anywhere (as the translate parser does) would discard the prose around
+ * it — and that fragment would then be pasted over the whole selection.
+ */
+function stripWholeFence(text: string): string {
+  const fenced = text.match(/^```[a-z]*\s*([\s\S]*?)\s*```$/i);
+  if (fenced && !fenced[1].includes("```")) {
+    return fenced[1].trim();
+  }
+  return text;
+}
+
+/**
+ * Strip a single pair of wrapping quotes the MODEL added. Quotes the author
+ * wrote themselves are kept: if the input was already wrapped in the same pair,
+ * the wrapping is the author's, not the model's.
+ */
+function stripWrappingQuotes(text: string, input: string): string {
+  const pairs: Array<[string, string]> = [
+    ['"', '"'],
+    ["'", "'"],
+    ["“", "”"],
+    ["«", "»"],
+  ];
+  for (const [open, close] of pairs) {
+    if (text.length < 2 || !text.startsWith(open) || !text.endsWith(close)) {
+      continue;
+    }
+    if (input.startsWith(open) && input.endsWith(close)) {
+      continue;
+    }
+    const inner = text.slice(open.length, text.length - close.length);
+    // Skip unwrapping if the delimiter recurs inside (a real quoted phrase).
+    if (!inner.includes(open) && !inner.includes(close)) {
+      return inner.trim();
+    }
+  }
+  return text;
 }
 
 /** Extracts the first brace-balanced object (string/escape aware). */
@@ -77,7 +124,7 @@ function tryParse(candidate: string): TranslateResult | null {
   }
 }
 
-export function parseModelOutput(raw: string): TranslateResult {
+export function parseTranslateOutput(raw: string): TranslateResult {
   const text = (raw ?? "").trim();
   const cleaned = stripCodeFences(text);
 
@@ -96,4 +143,16 @@ export function parseModelOutput(raw: string): TranslateResult {
 
   // Fallback: the model ignored the format — show the fence-stripped text as-is.
   return { translation: cleaned || text, explanation: null };
+}
+
+export function parseProofreadOutput(
+  raw: string,
+  input: string,
+): ProofreadResult {
+  const text = stripWrappingQuotes(stripWholeFence((raw ?? "").trim()), input);
+  if (text === "") {
+    // e.g. the model returned only an empty fence — never paste emptiness.
+    throw new ProviderError("parse", "Gemini returned an empty response.");
+  }
+  return { text };
 }

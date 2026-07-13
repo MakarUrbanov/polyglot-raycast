@@ -1,23 +1,34 @@
 /**
- * Headless run of the §8 test cases, bypassing the Raycast UI (Gemini only).
+ * Headless run of the test cases, bypassing the Raycast UI (Gemini only).
  *
  * Validates the prompt LOGIC (the main risk) directly through the core
- * `translate()`, without the Raycast modal and without preferences. The key
- * comes from the GEMINI_API_KEY env var.
+ * `translate()` / `proofread()`, without the Raycast modal and without
+ * preferences. The key comes from the GEMINI_API_KEY env var.
+ *
+ * Two suites: `translate` (the RU⇄EN flip + explanation block) and `proofread`
+ * (in-place correction, casual or formal). `--suite translate` reproduces the
+ * old behavior exactly.
  *
  * Usage:
- *   GEMINI_API_KEY=...  npm run eval                 # all cases
- *   GEMINI_API_KEY=...  npm run eval -- --case 1     # one case
- *   GEMINI_API_KEY=...  npm run eval -- --lang English
- *   npm run eval -- --list                           # list the cases
- *   npm run eval -- --case 8                          # "no key" — works without a key
+ *   GEMINI_API_KEY=...  npm run eval                          # both suites
+ *   GEMINI_API_KEY=...  npm run eval -- --suite proofread     # one suite
+ *   GEMINI_API_KEY=...  npm run eval -- --suite proofread --formal
+ *   GEMINI_API_KEY=...  npm run eval -- --suite translate --case 6
+ *   npm run eval -- --list                                    # list both suites
+ *   npm run eval -- --suite proofread --case 11               # "no key" — works keyless
  *
- * Flags: --case <N>  --lang <Language>  --model <id>  --always  --list  --help
+ * Flags: --suite <translate|proofread|all>  --case <N>  --formal
+ *        --lang <Language>  --always  --model <id>  --list  --help
  */
 
-import { DEFAULT_MODEL, translate } from "../src/providers";
-import type { TranslateOptions, TranslateResult } from "../src/providers/types";
-import { asTranslateError } from "../src/lib/errors";
+import { DEFAULT_MODEL, proofread, translate } from "../src/providers";
+import type {
+  ProofreadOptions,
+  ProofreadResult,
+  TranslateOptions,
+  TranslateResult,
+} from "../src/providers/types";
+import { asProviderError } from "../src/lib/errors";
 
 const ENV_KEY = "GEMINI_API_KEY";
 
@@ -32,22 +43,35 @@ const yellow = (s: string) => paint("33", s);
 const cyan = (s: string) => paint("36", s);
 
 // --- argument parsing --------------------------------------------------------
+type Suite = "translate" | "proofread" | "all";
+
 interface Args {
+  suite: Suite;
   caseNo?: number;
   lang?: string;
   model?: string;
+  formal: boolean;
   always: boolean;
   list: boolean;
   help: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { always: false, list: false, help: false };
+  const args: Args = { suite: "all", formal: false, always: false, list: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const valueOf = (inline?: string) => inline ?? argv[++i];
     const [flag, inline] = a.includes("=") ? [a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1)] : [a, undefined];
     switch (flag) {
+      case "--suite": {
+        const value = valueOf(inline);
+        if (value !== "translate" && value !== "proofread" && value !== "all") {
+          console.error(red(`Unknown suite: ${value} (use translate|proofread|all)`));
+          process.exit(1);
+        }
+        args.suite = value;
+        break;
+      }
       case "--case":
         args.caseNo = Number(valueOf(inline));
         break;
@@ -56,6 +80,9 @@ function parseArgs(argv: string[]): Args {
         break;
       case "--model":
         args.model = valueOf(inline);
+        break;
+      case "--formal":
+        args.formal = true;
         break;
       case "--always":
         args.always = true;
@@ -74,18 +101,20 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
-// --- §8 cases ----------------------------------------------------------------
-type Special = "emptyKey" | "langFlip";
-interface EvalCase {
+type Check<R> = (r: R) => { ok: boolean; note: string };
+
+// --- translate cases ---------------------------------------------------------
+type TranslateSpecial = "emptyKey" | "langFlip";
+interface TranslateCase {
   n: number;
   title: string;
   input: string;
   expect: string;
-  special?: Special;
-  check?: (r: TranslateResult) => { ok: boolean; note: string };
+  special?: TranslateSpecial;
+  check?: Check<TranslateResult>;
 }
 
-const CASES: EvalCase[] = [
+const TRANSLATE_CASES: TranslateCase[] = [
   {
     n: 1,
     title: "EN word «set» — polysemy",
@@ -144,7 +173,7 @@ const CASES: EvalCase[] = [
     n: 8,
     title: "Empty Gemini key",
     input: "test",
-    expect: "Core throws TranslateError kind=auth (UI leads to preferences). Works without a key.",
+    expect: "Core throws ProviderError kind=auth (UI leads to preferences). Works without a key.",
     special: "emptyKey",
     check: () => ({ ok: true, note: "" }),
   },
@@ -164,8 +193,141 @@ const CASES: EvalCase[] = [
   },
 ];
 
+// --- proofread cases ---------------------------------------------------------
+interface ProofreadCase {
+  n: number;
+  title: string;
+  input: string;
+  expect: string;
+  special?: "emptyKey";
+  /** Only meaningful in formal mode — SKIPped without --formal. */
+  onlyFormal?: boolean;
+  /** Tests a casual-mode contract (style preservation) — SKIPped under --formal. */
+  onlyCasual?: boolean;
+  check?: Check<ProofreadResult>;
+}
+
+const hasCyrillic = (t: string) => /[а-яё]/i.test(t);
+const hasLatin = (t: string) => /[a-z]/i.test(t);
+
+const PROOFREAD_CASES: ProofreadCase[] = [
+  {
+    n: 1,
+    title: "EN basic fix",
+    input: "your right, i think we should of tested it more before we shipped",
+    expect: "Corrected English: «your»→«you're», «i»→«I», «should of»→«should have»; wording kept.",
+  },
+  {
+    n: 2,
+    title: "Keep informal register",
+    input: "hey team, gonna push the fix in a sec, lmk if thats cool",
+    expect: "Casual kept — «hey»/«gonna» survive, not turned into «Hello»/«going to».",
+    onlyCasual: true,
+    check: (r) => {
+      const keptHey = /\bhey\b/i.test(r.text);
+      const keptGonna = /\bgonna\b/i.test(r.text);
+      const ok = keptHey && keptGonna;
+      return { ok, note: `hey:${keptHey ? "✓" : "✗"} gonna:${keptGonna ? "✓" : "✗"}` };
+    },
+  },
+  {
+    n: 3,
+    title: "Lowercase starts kept, i→I",
+    input: "i finished the task. lets review it together",
+    expect: "«i»→«I» (pronoun), «lets»→«let's», but the lowercase sentence start «lets» stays lowercase.",
+    onlyCasual: true,
+  },
+  {
+    n: 4,
+    title: "No trailing period added",
+    input: "this looks good to me",
+    expect: "Unchanged in spirit; NO trailing period added to the final sentence.",
+    onlyCasual: true,
+    check: (r) => {
+      const ok = !/\.\s*$/.test(r.text);
+      return { ok, note: ok ? "no trailing period" : "a trailing period was added" };
+    },
+  },
+  {
+    n: 5,
+    title: "RU fix stays Russian",
+    input: "я думаю что мы должны зделать это сегодня вечером",
+    expect: "«зделать»→«сделать»; the text stays Russian (not translated to English).",
+    check: (r) => {
+      const ok = hasCyrillic(r.text);
+      return { ok, note: ok ? "stayed Russian" : "no Cyrillic left — likely translated" };
+    },
+  },
+  {
+    n: 6,
+    title: "EN-dominant + «отправить» fragment",
+    input: "please отправить me the report by friday",
+    expect: "Fragment folded into English → «send»; no Cyrillic remains.",
+    check: (r) => {
+      const t = r.text;
+      const hasSend = /\bsend\b/i.test(t);
+      const noCyrillic = !hasCyrillic(t);
+      const ok = hasSend && noCyrillic;
+      return { ok, note: `send:${hasSend ? "✓" : "✗"} no-cyrillic:${noCyrillic ? "✓" : "✗"}` };
+    },
+  },
+  {
+    n: 7,
+    title: "RU loanword «ресёрч» kept",
+    input: "мне нужно провести ресёрч перед встречей с командой",
+    expect: "Stays Russian; loanword «ресёрч» kept in Cyrillic, not replaced with a Latin «research».",
+    onlyCasual: true,
+    check: (r) => {
+      const t = r.text;
+      const keptLoanword = /рес[её]рч/i.test(t);
+      const stayedRussian = hasCyrillic(t);
+      const noLatin = !hasLatin(t);
+      const ok = keptLoanword && stayedRussian && noLatin;
+      return {
+        ok,
+        note: `loanword:${keptLoanword ? "✓" : "✗"} russian:${stayedRussian ? "✓" : "✗"} no-latin:${noLatin ? "✓" : "✗"}`,
+      };
+    },
+  },
+  {
+    n: 8,
+    title: "Protected terms survive edits",
+    input: "we needs to push this too main and than check the CI before we merge",
+    expect: "Prose errors fixed; protected terms main / CI / push kept verbatim.",
+    check: (r) => {
+      const t = r.text;
+      const keptMain = /\bmain\b/.test(t);
+      const keptCI = /\bCI\b/.test(t);
+      const keptPush = /push/i.test(t);
+      const ok = keptMain && keptCI && keptPush;
+      return { ok, note: `main:${keptMain ? "✓" : "✗"} CI:${keptCI ? "✓" : "✗"} push:${keptPush ? "✓" : "✗"}` };
+    },
+  },
+  {
+    n: 9,
+    title: "Formal rewrite (formal mode only)",
+    input: "hey, can u send me the report asap? thx",
+    expect: "Formal register: polished, professional English; meaning preserved, nothing added.",
+    onlyFormal: true,
+  },
+  {
+    n: 10,
+    title: "Already-correct text unchanged",
+    input: "The meeting is scheduled for 3 PM tomorrow.",
+    expect: "Returned essentially unchanged (near-unchanged is fine).",
+  },
+  {
+    n: 11,
+    title: "Empty Gemini key",
+    input: "test",
+    expect: "Core throws ProviderError kind=auth (HUD leads to preferences). Works without a key.",
+    special: "emptyKey",
+    check: () => ({ ok: true, note: "" }),
+  },
+];
+
 // --- printing ----------------------------------------------------------------
-function printResult(r: TranslateResult) {
+function printTranslateResult(r: TranslateResult) {
   console.log(bold("Translation: ") + r.translation);
   if (r.explanation) {
     console.log(bold("Block:"));
@@ -180,20 +342,29 @@ function printResult(r: TranslateResult) {
   }
 }
 
+function printProofreadResult(r: ProofreadResult) {
+  console.log(bold("Corrected: ") + r.text);
+}
+
 function verdict(ok: boolean, note: string) {
   console.log((ok ? green("AUTO-CHECK: PASS") : red("AUTO-CHECK: FAIL")) + (note ? dim(` — ${note}`) : ""));
+}
+
+function caseHeader(suite: string, n: number, title: string, input: string, expect: string) {
+  console.log("");
+  console.log(cyan("─".repeat(70)));
+  console.log(cyan(`${suite} CASE ${n}. `) + bold(title));
+  console.log(dim("Input:    ") + JSON.stringify(input));
+  console.log(dim("Expected: ") + expect);
 }
 
 function flipLang(lang: string): string {
   return lang.trim().toLowerCase() === "russian" ? "English" : "Russian";
 }
 
-async function runCase(c: EvalCase, base: TranslateOptions, hasKey: boolean) {
-  console.log("");
-  console.log(cyan("─".repeat(70)));
-  console.log(cyan(`CASE ${c.n}. `) + bold(c.title));
-  console.log(dim("Input:    ") + JSON.stringify(c.input));
-  console.log(dim("Expected: ") + c.expect);
+// --- runners -----------------------------------------------------------------
+async function runTranslateCase(c: TranslateCase, base: TranslateOptions, hasKey: boolean) {
+  caseHeader("TRANSLATE", c.n, c.title, c.input, c.expect);
 
   // The "empty key" case does not need a real key.
   if (c.special === "emptyKey") {
@@ -201,7 +372,7 @@ async function runCase(c: EvalCase, base: TranslateOptions, hasKey: boolean) {
       await translate(c.input, { ...base, apiKey: "" });
       verdict(false, "expected an auth error, but the request went through");
     } catch (e) {
-      const err = asTranslateError(e);
+      const err = asProviderError(e);
       verdict(err.kind === "auth", `kind=${err.kind}: ${err.message}`);
     }
     return;
@@ -222,75 +393,170 @@ async function runCase(c: EvalCase, base: TranslateOptions, hasKey: boolean) {
     const started = Date.now();
     const r = await translate(c.input, opts);
     const ms = Date.now() - started;
-    printResult(r);
+    printTranslateResult(r);
     console.log(dim(`(${ms} ms)`));
     if (c.check) {
       const v = c.check(r);
       verdict(v.ok, v.note);
     }
   } catch (e) {
-    const err = asTranslateError(e);
+    const err = asProviderError(e);
     console.log(red(`ERROR: kind=${err.kind} — ${err.message}`));
   }
 }
 
+async function runProofreadCase(c: ProofreadCase, base: ProofreadOptions, hasKey: boolean) {
+  caseHeader("PROOFREAD", c.n, c.title, c.input, c.expect);
+
+  if (c.special === "emptyKey") {
+    try {
+      await proofread(c.input, { ...base, apiKey: "" });
+      verdict(false, "expected an auth error, but the request went through");
+    } catch (e) {
+      const err = asProviderError(e);
+      verdict(err.kind === "auth", `kind=${err.kind}: ${err.message}`);
+    }
+    return;
+  }
+
+  if (c.onlyFormal && !base.formal) {
+    console.log(yellow("SKIP: formal-only case — re-run with --formal."));
+    return;
+  }
+
+  if (c.onlyCasual && base.formal) {
+    console.log(yellow("SKIP: casual-only case — re-run without --formal."));
+    return;
+  }
+
+  if (!hasKey) {
+    console.log(yellow(`SKIP: no key in env (${ENV_KEY}) — live request skipped.`));
+    return;
+  }
+
+  try {
+    const started = Date.now();
+    const r = await proofread(c.input, base);
+    const ms = Date.now() - started;
+    printProofreadResult(r);
+    console.log(dim(`(${ms} ms, mode: ${base.formal ? "formal" : "casual"})`));
+    if (c.check) {
+      const v = c.check(r);
+      verdict(v.ok, v.note);
+    }
+  } catch (e) {
+    const err = asProviderError(e);
+    console.log(red(`ERROR: kind=${err.kind} — ${err.message}`));
+  }
+}
+
+// --- list / help -------------------------------------------------------------
+function printList() {
+  console.log(bold("Translate suite:"));
+  for (const c of TRANSLATE_CASES) {
+    console.log(`  ${String(c.n).padStart(2)}. ${c.title}`);
+  }
+  console.log("");
+  console.log(bold("Proofread suite:"));
+  for (const c of PROOFREAD_CASES) {
+    const tag = c.onlyFormal ? dim(" (--formal only)") : c.onlyCasual ? dim(" (casual only)") : "";
+    console.log(`  ${String(c.n).padStart(2)}. ${c.title}${tag}`);
+  }
+}
+
 function printHelp() {
-  console.log(`Polyglot eval — run the §8 test cases without the Raycast UI (Gemini only).
+  console.log(`Polyglot eval — run the test cases without the Raycast UI (Gemini only).
 
 Flags:
-  --case <N>            a single case (1..10)
-  --lang <Language>     block language (default: Russian)
-  --model <id>          override the Gemini model
-  --always              alwaysExplain = true
-  --list                list the cases
-  --help                this help
+  --suite <name>       translate | proofread | all (default: all)
+  --case <N>           a single case number within the selected suite(s)
+  --formal             proofread suite runs in formal mode (enables case 9, skips casual-only cases)
+  --lang <Language>    translate block language (default: Russian)
+  --always             translate alwaysExplain = true
+  --model <id>         override the Gemini model (both suites)
+  --list               list the cases of both suites
+  --help               this help
 
 Key via env: ${ENV_KEY}
-Example: ${ENV_KEY}=xxx npm run eval -- --case 1`);
+Examples:
+  ${ENV_KEY}=xxx npm run eval -- --suite translate --case 6
+  ${ENV_KEY}=xxx npm run eval -- --suite proofread --formal
+  npm run eval -- --suite proofread --case 11   # empty-key case, works keyless`);
+}
+
+// --- selection ---------------------------------------------------------------
+function select<T extends { n: number }>(cases: T[], caseNo?: number): T[] {
+  return caseNo ? cases.filter((c) => c.n === caseNo) : cases;
+}
+
+interface Bases {
+  translate: TranslateOptions;
+  proofread: ProofreadOptions;
+}
+
+function buildBases(args: Args, apiKey: string): Bases {
+  const model = args.model ?? DEFAULT_MODEL;
+  return {
+    translate: {
+      apiKey,
+      model,
+      explanationLanguage: args.lang ?? process.env.POLYGLOT_EXPLANATION_LANGUAGE ?? "Russian",
+      alwaysExplain: args.always,
+    },
+    proofread: { apiKey, model, formal: args.formal },
+  };
+}
+
+function printHeader(args: Args, bases: Bases, hasKey: boolean, wantTranslate: boolean, wantProofread: boolean) {
+  console.log(bold("Polyglot eval — Gemini"));
+  console.log(dim("Suite:        ") + args.suite);
+  console.log(dim("Model:        ") + bases.translate.model);
+  if (wantTranslate) {
+    console.log(dim("Block lang:   ") + bases.translate.explanationLanguage);
+    console.log(dim("alwaysExplain:") + ` ${bases.translate.alwaysExplain}`);
+  }
+  if (wantProofread) {
+    console.log(dim("Proofread:    ") + (args.formal ? "formal" : "casual"));
+  }
+  console.log(dim("Key:          ") + (hasKey ? green("set") : red(`missing (${ENV_KEY})`)));
+  if (!hasKey) {
+    console.log(yellow("Without a key only the empty-key cases run; the rest are SKIP."));
+  }
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-
   if (args.help) {
     printHelp();
     return;
   }
   if (args.list) {
-    console.log(bold("§8 cases:"));
-    for (const c of CASES) {
-      console.log(`  ${String(c.n).padStart(2)}. ${c.title}`);
-    }
+    printList();
     return;
   }
 
   const apiKey = (process.env[ENV_KEY] ?? "").trim();
   const hasKey = apiKey !== "";
-  const base: TranslateOptions = {
-    apiKey,
-    model: args.model ?? DEFAULT_MODEL,
-    explanationLanguage: args.lang ?? process.env.POLYGLOT_EXPLANATION_LANGUAGE ?? "Russian",
-    alwaysExplain: args.always,
-  };
+  const bases = buildBases(args, apiKey);
+  const wantTranslate = args.suite === "translate" || args.suite === "all";
+  const wantProofread = args.suite === "proofread" || args.suite === "all";
 
-  console.log(bold("Polyglot eval — Gemini"));
-  console.log(dim("Model:        ") + base.model);
-  console.log(dim("Block lang:   ") + base.explanationLanguage);
-  console.log(dim("alwaysExplain:") + ` ${base.alwaysExplain}`);
-  console.log(dim("Key:          ") + (hasKey ? green("set") : red(`missing (${ENV_KEY})`)));
-  if (!hasKey) {
-    console.log(yellow("Without a key only case 8 (empty key) runs; the rest are SKIP."));
-  }
+  printHeader(args, bases, hasKey, wantTranslate, wantProofread);
 
-  const selected = args.caseNo ? CASES.filter((c) => c.n === args.caseNo) : CASES;
-  if (selected.length === 0) {
-    console.error(red(`Case ${args.caseNo} not found (available 1..${CASES.length}).`));
+  const translateSelected = wantTranslate ? select(TRANSLATE_CASES, args.caseNo) : [];
+  const proofreadSelected = wantProofread ? select(PROOFREAD_CASES, args.caseNo) : [];
+  if (args.caseNo && translateSelected.length === 0 && proofreadSelected.length === 0) {
+    console.error(red(`Case ${args.caseNo} not found in the selected suite(s).`));
     process.exit(1);
   }
 
-  for (const c of selected) {
-    await runCase(c, base, hasKey);
+  for (const c of translateSelected) {
+    await runTranslateCase(c, bases.translate, hasKey);
   }
+  for (const c of proofreadSelected) {
+    await runProofreadCase(c, bases.proofread, hasKey);
+  }
+
   console.log("");
   console.log(cyan("─".repeat(70)));
   console.log(green("Done."));

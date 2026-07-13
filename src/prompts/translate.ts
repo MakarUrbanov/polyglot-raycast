@@ -1,22 +1,23 @@
 /**
- * The single system prompt — the heart of the extension. All of the §2–§3 logic
- * lives here: the bilingual RU⇄EN flip, the "do not translate" rules, dictionary
- * mode, and the conditions for showing the explanation block. Used by the
- * Gemini provider.
+ * The translate system prompt — the heart of the Translate command. All of the
+ * §2–§3 logic lives here: the bilingual RU⇄EN flip, the "do not translate"
+ * rules, dictionary mode, and the conditions for showing the explanation block.
+ * Used by the Gemini provider.
  *
  * The prompt is intentionally written in English: English instructions give the
  * model less ambiguity. The OUTPUT language of the block is set via the
  * explanationLanguage parameter; the user never sees the system text itself.
  */
 
-import type { TranslateOptions } from "./providers/types";
+import type { TranslateOptions } from "../providers/types";
+import { wrapInput } from "./shared";
 
 export type PromptParams = Pick<
   TranslateOptions,
   "explanationLanguage" | "alwaysExplain"
 >;
 
-export function buildSystemPrompt({
+export function buildTranslateSystemPrompt({
   explanationLanguage,
   alwaysExplain,
 }: PromptParams): string {
@@ -83,15 +84,11 @@ ${blockRules}
 }
 
 /** User message: input wrapped in delimiters so the model doesn't read it as instructions. */
-export function buildUserPrompt(input: string): string {
-  // Neutralize a literal closing delimiter so the input can't break out of the fence.
-  const safe = input.replace(/<\/input>/gi, "<\\/input>");
+export function buildTranslateUserPrompt(input: string): string {
   return [
     "Translate the text inside <input></input>, following every rule above.",
     "Return ONLY the JSON object — no preamble, no code fences.",
     "",
-    "<input>",
-    safe,
-    "</input>",
+    wrapInput(input),
   ].join("\n");
 }
