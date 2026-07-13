@@ -47,11 +47,14 @@ function stripWrappingQuotes(text: string, input: string): string {
     ["“", "”"],
     ["«", "»"],
   ];
+  // Input wrapped in ANY pair = author's quotes; translation may swap glyphs.
+  const wraps = ([open, close]: [string, string], t: string) =>
+    t.length >= 2 && t.startsWith(open) && t.endsWith(close);
+  if (pairs.some((pair) => wraps(pair, input))) {
+    return text;
+  }
   for (const [open, close] of pairs) {
-    if (text.length < 2 || !text.startsWith(open) || !text.endsWith(close)) {
-      continue;
-    }
-    if (input.startsWith(open) && input.endsWith(close)) {
+    if (!wraps([open, close], text)) {
       continue;
     }
     const inner = text.slice(open.length, text.length - close.length);

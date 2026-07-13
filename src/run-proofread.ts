@@ -34,10 +34,14 @@ type PasteMode = "plain" | "normal" | "copy";
 /** Resolve global preferences into core options (proofread adds no per-command prefs). */
 function resolveOptions(formal: boolean): ProofreadOptions {
   const prefs = getPreferenceValues<Preferences>();
+  const language = (prefs.outputLanguage ?? "").trim();
   return {
     apiKey: (prefs.apiKey ?? "").trim(),
     model: (prefs.model ?? "").trim() || DEFAULT_MODEL,
     formal,
+    outputLanguage: /^auto$/i.test(language)
+      ? undefined
+      : language || undefined,
   };
 }
 

@@ -52,6 +52,8 @@ interface Args {
   model?: string;
   formal: boolean;
   always: boolean;
+  /** Proofread target language (--to); undefined or "auto" = keep the input's language. */
+  to?: string;
   list: boolean;
   help: boolean;
 }
@@ -83,6 +85,9 @@ function parseArgs(argv: string[]): Args {
         break;
       case "--formal":
         args.formal = true;
+        break;
+      case "--to":
+        args.to = valueOf(inline);
         break;
       case "--always":
         args.always = true;
@@ -204,6 +209,8 @@ interface ProofreadCase {
   onlyFormal?: boolean;
   /** Tests a casual-mode contract (style preservation) — SKIPped under --formal. */
   onlyCasual?: boolean;
+  /** Tests the fixed-output-language contract — SKIPped without --to. */
+  needsTarget?: boolean;
   check?: Check<ProofreadResult>;
 }
 
@@ -377,6 +384,45 @@ const PROOFREAD_CASES: ProofreadCase[] = [
       return { ok, note: `2-paragraphs:${paragraphs ? "✓" : "✗"} plan:${fixed ? "✓" : "✗"}` };
     },
   },
+  {
+    n: 16,
+    title: "Target language: RU in → EN out, register kept",
+    input: "привет! я задержусь минут на 15, сорри за это",
+    expect: "With --to English: casual English out (no Cyrillic), not formalized into «Hello».",
+    needsTarget: true,
+    onlyCasual: true,
+    check: (r) => {
+      const noCyrillic = !hasCyrillic(r.text);
+      const casualKept = !/^\s*hello\b/i.test(r.text);
+      const ok = noCyrillic && casualKept;
+      return { ok, note: `english:${noCyrillic ? "✓" : "✗"} casual:${casualKept ? "✓" : "✗"}` };
+    },
+  },
+  {
+    n: 17,
+    title: "Target language: EN in stays EN, just proofread",
+    input: "she do not have access to the dashboard",
+    expect: "With --to English: normal proofread («do not»→«does not»), nothing translated.",
+    needsTarget: true,
+    check: (r) => {
+      const fixed = /\bdoes not have\b|\bdoesn't have\b/i.test(r.text);
+      const noCyrillic = !hasCyrillic(r.text);
+      const ok = fixed && noCyrillic;
+      return { ok, note: `fixed:${fixed ? "✓" : "✗"} english:${noCyrillic ? "✓" : "✗"}` };
+    },
+  },
+  {
+    n: 18,
+    title: "Target language + formal: RU in → formal EN out",
+    input: "привет, скинь плиз отчет когда будет готов",
+    expect: "With --to English --formal: polished formal English (no Cyrillic), register raised, meaning kept.",
+    needsTarget: true,
+    onlyFormal: true,
+    check: (r) => {
+      const noCyrillic = !hasCyrillic(r.text);
+      return { ok: noCyrillic, note: noCyrillic ? "english out (register: eyeball)" : "Cyrillic left in output" };
+    },
+  },
 ];
 
 // --- printing ----------------------------------------------------------------
@@ -482,6 +528,11 @@ async function runProofreadCase(c: ProofreadCase, base: ProofreadOptions, hasKey
     return;
   }
 
+  if (c.needsTarget && !base.outputLanguage) {
+    console.log(yellow("SKIP: needs a target language — re-run with --to English."));
+    return;
+  }
+
   if (!hasKey) {
     console.log(yellow(`SKIP: no key in env (${ENV_KEY}) — live request skipped.`));
     return;
@@ -512,8 +563,12 @@ function printList() {
   console.log("");
   console.log(bold("Proofread suite:"));
   for (const c of PROOFREAD_CASES) {
-    const tag = c.onlyFormal ? dim(" (--formal only)") : c.onlyCasual ? dim(" (casual only)") : "";
-    console.log(`  ${String(c.n).padStart(2)}. ${c.title}${tag}`);
+    const tags = [
+      c.onlyFormal ? " (--formal only)" : "",
+      c.onlyCasual ? " (casual only)" : "",
+      c.needsTarget ? " (--to only)" : "",
+    ].join("");
+    console.log(`  ${String(c.n).padStart(2)}. ${c.title}${dim(tags)}`);
   }
 }
 
@@ -524,6 +579,7 @@ Flags:
   --suite <name>       translate | proofread | all (default: all)
   --case <N>           a single case number within the selected suite(s)
   --formal             proofread suite runs in formal mode (enables case 9, skips casual-only cases)
+  --to <Language>      proofread target language (e.g. English); default auto = keep the input's language
   --lang <Language>    translate block language (default: Russian)
   --always             translate alwaysExplain = true
   --model <id>         override the Gemini model (both suites)
@@ -534,6 +590,7 @@ Key via env: ${ENV_KEY}
 Examples:
   ${ENV_KEY}=xxx npm run eval -- --suite translate --case 6
   ${ENV_KEY}=xxx npm run eval -- --suite proofread --formal
+  ${ENV_KEY}=xxx npm run eval -- --suite proofread --to English
   npm run eval -- --suite proofread --case 11   # empty-key case, works keyless`);
 }
 
@@ -549,6 +606,7 @@ interface Bases {
 
 function buildBases(args: Args, apiKey: string): Bases {
   const model = args.model ?? DEFAULT_MODEL;
+  const toLang = args.to?.trim();
   return {
     translate: {
       apiKey,
@@ -556,7 +614,12 @@ function buildBases(args: Args, apiKey: string): Bases {
       explanationLanguage: args.lang ?? process.env.POLYGLOT_EXPLANATION_LANGUAGE ?? "Russian",
       alwaysExplain: args.always,
     },
-    proofread: { apiKey, model, formal: args.formal },
+    proofread: {
+      apiKey,
+      model,
+      formal: args.formal,
+      outputLanguage: toLang && !/^auto$/i.test(toLang) ? toLang : undefined,
+    },
   };
 }
 
@@ -570,6 +633,7 @@ function printHeader(args: Args, bases: Bases, hasKey: boolean, wantTranslate: b
   }
   if (wantProofread) {
     console.log(dim("Proofread:    ") + (args.formal ? "formal" : "casual"));
+    console.log(dim("Target lang:  ") + (bases.proofread.outputLanguage ?? "auto"));
   }
   console.log(dim("Key:          ") + (hasKey ? green("set") : red(`missing (${ENV_KEY})`)));
   if (!hasKey) {

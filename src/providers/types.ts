@@ -25,6 +25,8 @@ export interface TranslateOptions extends BaseOptions {
 export interface ProofreadOptions extends BaseOptions {
   /** When true, rewrite into a polished formal register; otherwise keep the author's register. */
   formal: boolean;
+  /** Force the output into this language (e.g. "English"); undefined keeps the input's own language. */
+  outputLanguage?: string;
 }
 
 export interface TranslateResult {

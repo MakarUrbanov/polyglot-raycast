@@ -66,6 +66,14 @@
       "default": "gemini-2.5-flash"
     },
     {
+      "name": "outputLanguage",
+      "title": "Proofread Output Language",
+      "description": "Proofread commands only. \"auto\" keeps each text's own language; a language name (e.g. English) makes Proofread always produce that language — translating the text into it when needed.",
+      "type": "textfield",
+      "required": false,
+      "default": "auto"
+    },
+    {
       "name": "pasteMode",
       "title": "Paste Mode",
       "description": "Proofread commands only: how the corrected text replaces your selection. Plain (match style) avoids the extra blank lines Teams/Slack add on a rich paste; needs Accessibility permission for Raycast.",

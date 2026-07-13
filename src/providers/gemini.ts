@@ -113,7 +113,10 @@ export async function proofreadWithGemini(
   opts: ProofreadOptions,
 ): Promise<ProofreadResult> {
   const { text, finishReason } = await callGemini({
-    system: buildProofreadSystemPrompt({ formal: opts.formal }),
+    system: buildProofreadSystemPrompt({
+      formal: opts.formal,
+      outputLanguage: opts.outputLanguage,
+    }),
     user: buildProofreadUserPrompt(input),
     generationConfig: {
       thinkingConfig: { thinkingBudget: 0 },

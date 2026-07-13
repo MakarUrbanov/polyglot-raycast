@@ -41,6 +41,12 @@ without opening a window — the whole interaction is a single HUD line.
   emoji are all left alone). *Proofread Formal* also rewrites the text into a polished formal
   register — it may swap casual words for formal ones and tighten phrasing, but keeps your
   meaning and adds nothing.
+- **Output language** (preference). By default (`auto`) the result stays in the text's own
+  language. Set **Proofread Output Language** to a language name (e.g. `English`) and both
+  commands always produce that language: text already in it is simply proofread, anything else
+  is **translated into it** — keeping your tone in casual mode, formalized in formal mode.
+  Typical setup for a Russian speaker working in English-speaking chats: set it to `English`
+  and hit the same hotkey no matter which language the draft came out in.
 - **Paste-back vs clipboard.** If text is selected, the result is **pasted straight over the
   selection**. If nothing is selected, Polyglot falls back to the **clipboard**: it proofreads
   the clipboard contents and copies the result back for you to paste. Surrounding whitespace of
@@ -62,11 +68,12 @@ without opening a window — the whole interaction is a single HUD line.
 - **10 000-character guard.** Selections longer than ~10k characters are refused with a HUD
   warning and no model call — so a truncated response can never be pasted over a big selection.
 
-### Mixed-language input
+### Mixed-language input (auto mode)
 
-The proofreader detects the **dominant** language and works in it — it **never translates the
-whole text**. But an inline fragment written in another language (you blanked on a word and
-dropped in your native one mid-sentence) is folded into the dominant language:
+With the default `auto` output language, the proofreader detects the **dominant** language and
+works in it — it **never translates the whole text**. But an inline fragment written in another
+language (you blanked on a word and dropped in your native one mid-sentence) is folded into the
+dominant language:
 
 > `please отправить me the report` → `please send me the report`
 
@@ -135,6 +142,7 @@ the Translate command**.
 |---|---|---|---|
 | **Gemini API Key** | password | — | Free key — [aistudio.google.com](https://aistudio.google.com/app/apikey). |
 | **Gemini Model** | text | `gemini-2.5-flash` | Gemini model ID. |
+| **Proofread Output Language** | text | `auto` | Proofread commands only: `auto` keeps each text's own language; a language name (e.g. `English`) makes Proofread always produce that language, translating when needed. |
 | **Paste Mode** | dropdown | `Plain` | Proofread commands only: how the result replaces the selection — plain match-style `⇧⌘V` (no extra blank lines in Teams/Slack; needs Accessibility), normal `⌘V`, or copy-only. |
 
 **Translate command only** (Raycast shows these on the Translate command's own settings, not
@@ -186,6 +194,9 @@ GEMINI_API_KEY=... npm run eval -- --suite proofread
 
 # proofread in formal mode (enables the formal-only case 9, skips casual-only cases)
 GEMINI_API_KEY=... npm run eval -- --suite proofread --formal
+
+# proofread with a fixed output language (enables the --to-only cases 16-17)
+GEMINI_API_KEY=... npm run eval -- --suite proofread --to English
 
 # a specific case within the selected suite(s)
 GEMINI_API_KEY=... npm run eval -- --suite translate --case 6
