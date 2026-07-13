@@ -45,6 +45,20 @@ without opening a window — the whole interaction is a single HUD line.
   selection**. If nothing is selected, Polyglot falls back to the **clipboard**: it proofreads
   the clipboard contents and copies the result back for you to paste. Surrounding whitespace of
   the selection (leading/trailing spaces and newlines) is preserved.
+- **Paste Mode** (preference). Rich-text apps — Microsoft Teams, Slack — turn a normal paste's
+  line breaks into spaced-out paragraphs. The default mode **Plain** pastes with *match style*
+  (`⇧⌘V`), which avoids that; it needs **Accessibility** permission for Raycast (macOS System
+  Settings → Privacy & Security → Accessibility), and falls back to a normal paste if the
+  permission is missing. Caveat: a few apps bind `⇧⌘V` to something else (e.g. VS Code) — there
+  the paste won't land; the result is always left on the clipboard as a backup (`⌘V`), or
+  switch to **Normal** mode. Other modes: **Normal** (`⌘V`) and **Copy only** (never paste,
+  just put the result on the clipboard).
+- **Line breaks, markup, punctuation.** The prompt pins down three things models love to
+  "improve": the author's line structure is kept exactly (no merged lines, no invented blank
+  lines — model-added blank lines are also stripped in code), markup (Markdown / Jira wiki /
+  HTML — bullets, `h1.` headings, `[link|url]`, `{code}` blocks) is reproduced verbatim with
+  only the prose inside corrected, and no em dashes (—) / double hyphens (--) / smart quotes
+  are introduced if the author didn't write them.
 - **10 000-character guard.** Selections longer than ~10k characters are refused with a HUD
   warning and no model call — so a truncated response can never be pasted over a big selection.
 
@@ -121,6 +135,7 @@ the Translate command**.
 |---|---|---|---|
 | **Gemini API Key** | password | — | Free key — [aistudio.google.com](https://aistudio.google.com/app/apikey). |
 | **Gemini Model** | text | `gemini-2.5-flash` | Gemini model ID. |
+| **Paste Mode** | dropdown | `Plain` | Proofread commands only: how the result replaces the selection — plain match-style `⇧⌘V` (no extra blank lines in Teams/Slack; needs Accessibility), normal `⌘V`, or copy-only. |
 
 **Translate command only** (Raycast shows these on the Translate command's own settings, not
 the extension-wide ones):
@@ -184,9 +199,9 @@ npm run eval -- --help                       # all flags
 
 Some cases carry a programmatic auto-check (translate: block absent / terms kept / auth error;
 proofread: informal register kept, no trailing period, stays in the source language, foreign
-fragment folded in, loanword kept, protected terms kept, auth error); the rest are printed for
-eyeballing. Without a key only the empty-key cases run — the rest are `SKIP`. Env key:
-`GEMINI_API_KEY`.
+fragment folded in, loanword kept, protected terms kept, line breaks kept, markup kept, no em
+dash introduced, auth error); the rest are printed for eyeballing. Without a key only the
+empty-key cases run — the rest are `SKIP`. Env key: `GEMINI_API_KEY`.
 
 ## Architecture
 

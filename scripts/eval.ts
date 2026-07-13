@@ -324,6 +324,59 @@ const PROOFREAD_CASES: ProofreadCase[] = [
     special: "emptyKey",
     check: () => ({ ok: true, note: "" }),
   },
+  {
+    n: 12,
+    title: "Line breaks preserved, no blank lines added",
+    input: "fixed the login bug\nalso added two more test\nupdated the readme accordingly",
+    expect: "Three lines in, three lines out; no blank lines between them; «test»→«tests».",
+    check: (r) => {
+      const sameLines = r.text.split("\n").length === 3;
+      const fixed = /\btests\b/i.test(r.text);
+      const ok = sameLines && fixed;
+      return { ok, note: `3-lines:${sameLines ? "✓" : "✗"} tests:${fixed ? "✓" : "✗"}` };
+    },
+  },
+  {
+    n: 13,
+    title: "Jira markup kept verbatim",
+    input: "h1. Summary\n* we needs to update the login flow\n* see [docs|https://example.com/spec] for detail",
+    expect: "«needs»→«need», «detail»→«details»; h1. heading, * bullets and the [docs|…] link untouched.",
+    check: (r) => {
+      const t = r.text;
+      const keptHeading = /^h1\. /m.test(t);
+      const keptBullets = (t.match(/^\* /gm) ?? []).length === 2;
+      const keptLink = t.includes("[docs|https://example.com/spec]");
+      const fixed = /\bwe need\b/i.test(t) && /\bdetails\b/i.test(t);
+      const ok = keptHeading && keptBullets && keptLink && fixed;
+      return {
+        ok,
+        note: `h1:${keptHeading ? "✓" : "✗"} bullets:${keptBullets ? "✓" : "✗"} link:${keptLink ? "✓" : "✗"} fixed:${fixed ? "✓" : "✗"}`,
+      };
+    },
+  },
+  {
+    n: 14,
+    title: "No em dash introduced",
+    input: "the fix is simple - just restart the service and check the logs",
+    expect: "The author's hyphen is not upgraded: no em dash (—) and no double hyphen (--) in the output.",
+    check: (r) => {
+      const ok = !r.text.includes("—") && !r.text.includes("--");
+      return { ok, note: ok ? "no em dash / --" : "an em dash or -- was introduced" };
+    },
+  },
+  {
+    n: 15,
+    title: "Author's paragraph break kept, none added",
+    input: "the team has finished the migration\n\nnext week we plans to update the docs",
+    expect:
+      "Input HAS a blank line, so the code-level guard is off — the PROMPT must keep exactly one paragraph break; «plans»→«plan».",
+    check: (r) => {
+      const paragraphs = r.text.split(/\n[ \t]*\n/).length === 2;
+      const fixed = /\bwe plan\b/i.test(r.text);
+      const ok = paragraphs && fixed;
+      return { ok, note: `2-paragraphs:${paragraphs ? "✓" : "✗"} plan:${fixed ? "✓" : "✗"}` };
+    },
+  },
 ];
 
 // --- printing ----------------------------------------------------------------
