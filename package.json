@@ -64,6 +64,19 @@
       "type": "textfield",
       "required": false,
       "default": "gemini-2.5-flash"
+    },
+    {
+      "name": "pasteMode",
+      "title": "Paste Mode",
+      "description": "Proofread commands only: how the corrected text replaces your selection. Plain (match style) avoids the extra blank lines Teams/Slack add on a rich paste; needs Accessibility permission for Raycast.",
+      "type": "dropdown",
+      "required": false,
+      "default": "plain",
+      "data": [
+        { "title": "Plain (Shift+Cmd+V, match style)", "value": "plain" },
+        { "title": "Normal (Cmd+V, keep formatting)", "value": "normal" },
+        { "title": "Copy only (don't paste)", "value": "copy" }
+      ]
     }
   ],
   "dependencies": {

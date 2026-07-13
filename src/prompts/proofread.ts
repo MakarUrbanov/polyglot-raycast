@@ -32,7 +32,8 @@ export function buildProofreadSystemPrompt({
     ? `## Fix the mechanics
 - Fix grammar, spelling, and punctuation.
 - Rewrite the text into a polished, professional, formal register. You MAY swap casual words for formal equivalents (for example «привет» → «здравствуйте», "hi" → "hello", "gonna" → "going to"), tighten phrasing, and improve clarity.
-- Preserve the author's original meaning. Add no new information.`
+- Preserve the author's original meaning. Add no new information.
+- Do NOT introduce em dashes (—) or double hyphens (--) the author did not write — prefer commas, colons, or periods. Keep the author's dash and quote style.`
     : `## Fix the mechanics
 - Fix only grammar, spelling, and punctuation.
 - Keep the author's exact wording, tone, and level of formality. Do NOT make the text more formal (for example, do not change «привет» to «здравствуйте» or "hi" to "hello").
@@ -43,7 +44,13 @@ export function buildProofreadSystemPrompt({
     : `## Preserve the author's style (casual)
 - Do NOT capitalize the first word of a sentence if the author left it lowercase — keep lowercase sentence starts as-is.
 - Do NOT add a trailing period to the final sentence unless the author already put one there. Add a period only when it separates two sentences; leave the last sentence as the author left it.
-- Do not touch intentional casing, emphasis, emoji, slang, or informal spellings that are not actual errors.`;
+- Do not touch intentional casing, emphasis, emoji, slang, or informal spellings that are not actual errors.
+- Do NOT introduce punctuation the author did not use: no em dashes (—), no double hyphens (--), no smart quotes, no ellipsis character (…). A hyphen the author wrote stays a hyphen.`;
+
+  const structureAndMarkup = `## Line structure & markup — keep them EXACTLY
+- Keep the author's line breaks exactly: the output has the same lines in the same order. Never merge or split lines, and never insert a blank line the author did not write.
+- The text may contain markup: Markdown, Jira/Confluence wiki syntax, or HTML (examples: *bold*, _italics_, \`code\`, {code}...{code}, [link|https://...], [text](https://...), h1./h2. or # headings, list bullets - / * / 1., > quotes, tables, indentation). Markup characters are NOT prose — reproduce every markup token verbatim, in place, and proofread only the human text around and inside them.
+- These structure rules WIN over every other instruction${formal ? ", including the formal rewrite: tighten wording within a line, never across lines" : ""}.`;
 
   // Seven rule blocks in the spec's fixed order; null blocks (formal-only) drop out.
   const blocks = [
@@ -58,20 +65,22 @@ export function buildProofreadSystemPrompt({
 
     stylePreservation,
 
+    structureAndMarkup,
+
     `## Inline foreign fragments — fold them into the dominant language
 The author sometimes drops a word or short phrase from another language into the middle of a sentence, usually because they blanked on the word. Handle those, but nothing else:${
       formal
         ? ""
         : `\n- Folding a foreign fragment is the ONE exception to the keep-the-author's-exact-wording rule above — apply it even when everything else must stay untouched.`
     }
-- A fragment written in a DIFFERENT script from the dominant language is the strongest hint that it is foreign (a Cyrillic word inside an English sentence, or a Latin word inside a Russian one).
-- Translate a clearly-foreign fragment into the dominant language, and make it agree grammatically (case, number, gender, tense) and match the surrounding register.
+- A fragment written in a DIFFERENT script from the dominant language (a Cyrillic word inside an English sentence, or a Latin word inside a Russian one) MUST be translated into the dominant language — never leave it as it is. The only exceptions are the protected terms listed below (they already cover proper nouns, brands, and tool names). Example: "please отправить me the report" → "please send me the report".
+- Make the translated fragment agree grammatically (case, number, gender, tense) and match the surrounding register.
 - BUT keep loanwords that are normally written in the dominant language's own alphabet — do not "correct" them back to the source language. In Russian, «ресёрч», «запушь», «пофиксить» stay as written; do not turn them into "research", "push", "fix".${
       formal
         ? `\n- In formal mode you MAY replace a casual loanword with its formal equivalent in the SAME language («пофиксить» → «исправить», «ресёрч» → «исследование») — but never convert it back to its source language.`
         : ""
     }
-- Tie-breaker when unsure: an everyday word → translate it; a piece of jargon, a tool name, or a brand → keep it.`,
+- Tie-breaker for a SAME-script borrowing when unsure: an everyday word → translate it; a piece of jargon, a tool name, or a brand → keep it. (Different-script fragments follow the MUST rule above.)`,
 
     PROTECTED_TERMS,
 

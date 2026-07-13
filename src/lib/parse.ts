@@ -145,11 +145,30 @@ export function parseTranslateOutput(raw: string): TranslateResult {
   return { translation: cleaned || text, explanation: null };
 }
 
+/**
+ * Collapse blank lines the model invented. LLMs habitually reformat multiline
+ * text into blank-line-separated paragraphs; pasted into chat apps that reads
+ * as double spacing. If the input had NO blank line, every blank line in the
+ * output is model-added — fold each back into a single newline.
+ */
+function collapseAddedBlankLines(text: string, input: string): string {
+  // CR-aware: a selection may arrive with \r\n while the model emits \n.
+  const blankLine = /\r?\n[ \t]*\r?\n/;
+  if (blankLine.test(input) || !blankLine.test(text)) {
+    return text;
+  }
+  return text.replace(/(\r?\n)(?:[ \t]*\r?\n)+/g, "$1");
+}
+
 export function parseProofreadOutput(
   raw: string,
   input: string,
 ): ProofreadResult {
-  const text = stripWrappingQuotes(stripWholeFence((raw ?? "").trim()), input);
+  const cleaned = stripWrappingQuotes(
+    stripWholeFence((raw ?? "").trim()),
+    input,
+  );
+  const text = collapseAddedBlankLines(cleaned, input);
   if (text === "") {
     // e.g. the model returned only an empty fence — never paste emptiness.
     throw new ProviderError("parse", "Gemini returned an empty response.");

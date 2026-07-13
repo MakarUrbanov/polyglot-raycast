@@ -20,12 +20,16 @@ import {
   openExtensionPreferences,
   showHUD,
 } from "@raycast/api";
+import { runAppleScript } from "@raycast/utils";
 import { DEFAULT_MODEL, proofread } from "./providers";
 import type { ProofreadOptions } from "./providers/types";
 import { asProviderError, type ProviderError } from "./lib/errors";
 
 /** Refuse selections larger than this so a truncated paste can't clobber them. */
 const MAX_INPUT_CHARS = 10_000;
+
+/** How the corrected text replaces the selection (the pasteMode preference). */
+type PasteMode = "plain" | "normal" | "copy";
 
 /** Resolve global preferences into core options (proofread adds no per-command prefs). */
 function resolveOptions(formal: boolean): ProofreadOptions {
@@ -35,6 +39,37 @@ function resolveOptions(formal: boolean): ProofreadOptions {
     model: (prefs.model ?? "").trim() || DEFAULT_MODEL,
     formal,
   };
+}
+
+function resolvePasteMode(): PasteMode {
+  const mode = getPreferenceValues<Preferences>().pasteMode;
+  return mode === "normal" || mode === "copy" ? mode : "plain";
+}
+
+/**
+ * Paste over the selection. In "plain" mode: copy the string and send
+ * Shift+Cmd+V ("Paste and Match Style") so rich-text apps (Teams, Slack) don't
+ * inject blank lines between the pasted lines. That keystroke needs
+ * Accessibility permission for Raycast — if it fails, fall back to the normal
+ * rich paste so the run still completes.
+ */
+async function pasteResult(text: string, mode: PasteMode): Promise<string> {
+  if (mode === "plain") {
+    await Clipboard.copy(text);
+    try {
+      await runAppleScript(
+        'tell application "System Events" to keystroke "v" using {command down, shift down}',
+      );
+      // Some apps bind ⇧⌘V to something else — the clipboard is the backup.
+      return "✅ Proofread — pasted via ⇧⌘V (also on clipboard)";
+    } catch {
+      // Accessibility not granted (or the keystroke failed) — rich paste instead.
+      await Clipboard.paste(text);
+      return "✅ Proofread — pasted; allow Accessibility for plain paste";
+    }
+  }
+  await Clipboard.paste(text);
+  return "✅ Proofread — pasted in place";
 }
 
 /**
@@ -103,10 +138,11 @@ export async function runProofread(formal: boolean): Promise<void> {
     await showHUD(`${label}…`);
     const { text: corrected } = await proofread(core, resolveOptions(formal));
 
-    if (fromSelection) {
+    const mode = resolvePasteMode();
+    if (fromSelection && mode !== "copy") {
       // Re-apply the selection's original surrounding whitespace before pasting.
-      await Clipboard.paste(lead + corrected + trail);
-      await showHUD("✅ Proofread — pasted in place");
+      const hud = await pasteResult(lead + corrected + trail, mode);
+      await showHUD(hud);
     } else {
       await Clipboard.copy(corrected);
       await showHUD("✅ Proofread — copied to clipboard");
