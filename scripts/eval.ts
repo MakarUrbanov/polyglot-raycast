@@ -423,6 +423,56 @@ const PROOFREAD_CASES: ProofreadCase[] = [
       return { ok: noCyrillic, note: noCyrillic ? "english out (register: eyeball)" : "Cyrillic left in output" };
     },
   },
+  {
+    n: 19,
+    title: "Word order: trailing adverb calque fixed",
+    input: "we're working with Sergey on keeping them up to date always",
+    expect:
+      "Russian-style trailing «always» moved before the verb: «on always keeping them up to date» (or «…to make sure they're always up to date»). Not left at the end.",
+    check: (r) => {
+      const t = r.text.toLowerCase();
+      const hasAlways = /\balways\b/.test(t);
+      const notTrailing = !/always[\s.!?]*$/.test(t.trim());
+      const alwaysIdx = t.indexOf("always");
+      const upToDateIdx = t.indexOf("up to date");
+      const movedEarlier = hasAlways && (upToDateIdx === -1 || alwaysIdx < upToDateIdx);
+      const ok = hasAlways && notTrailing && movedEarlier;
+      return {
+        ok,
+        note: `always:${hasAlways ? "✓" : "✗"} not-trailing:${notTrailing ? "✓" : "✗"} moved:${movedEarlier ? "✓" : "✗"}`,
+      };
+    },
+  },
+  {
+    n: 20,
+    title: "Word order: natural sentence left intact",
+    input: "on Friday we shipped the release, and the team celebrated afterward",
+    expect:
+      "Already-natural English; word order untouched. «afterward» stays at the end (correct here, unlike a calqued trailing adverb) and «on Friday» stays fronted.",
+    onlyCasual: true,
+    check: (r) => {
+      const t = r.text.toLowerCase();
+      const fridayFront = t.indexOf("friday") !== -1 && t.indexOf("friday") < t.indexOf("shipped");
+      const afterwardEnd = t.indexOf("afterward") > t.indexOf("celebrated");
+      const ok = fridayFront && afterwardEnd;
+      return { ok, note: `friday-front:${fridayFront ? "✓" : "✗"} afterward-end:${afterwardEnd ? "✓" : "✗"}` };
+    },
+  },
+  {
+    n: 21,
+    title: "Word order: RU flexible order not normalized",
+    input: "вчера весь день я работал из дома, а вечером немного погулял",
+    expect:
+      "Russian permits this fronted order; leave it. Stays Russian, «вчера» stays fronted — do NOT normalize to a neutral subject-verb order.",
+    onlyCasual: true,
+    check: (r) => {
+      const t = r.text.toLowerCase();
+      const stayedRussian = hasCyrillic(t);
+      const fronted = t.indexOf("вчера") !== -1 && t.indexOf("вчера") < t.indexOf("работал");
+      const ok = stayedRussian && fronted;
+      return { ok, note: `russian:${stayedRussian ? "✓" : "✗"} вчера-front:${fronted ? "✓" : "✗"}` };
+    },
+  },
 ];
 
 // --- printing ----------------------------------------------------------------

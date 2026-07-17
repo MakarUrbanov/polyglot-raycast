@@ -7,8 +7,8 @@ Three commands, all on **Google Gemini** (free tier — the key is free, see bel
    English, type English and you get Russian. Below the translation, **when it helps**, an
    explanation block appears (meanings, idioms, false friends, grammar) — a plain translator
    turned study tool.
-2. **Proofread** — fix grammar, spelling and punctuation in the **selected text, in place**,
-   keeping your wording and tone. For Slack / Teams / chat.
+2. **Proofread** — fix grammar, spelling, punctuation and awkward word order in the
+   **selected text, in place**, keeping your wording and tone. For Slack / Teams / chat.
 3. **Proofread Formal** — the same, but also rewrites the text into a polished formal
    register. For a corporate email.
 
@@ -38,9 +38,11 @@ without opening a window — the whole interaction is a single HUD line.
   can hit while editing anywhere.
 - **Casual vs formal.** *Proofread* fixes grammar, spelling and punctuation while keeping your
   exact wording, tone and register (lowercase sentence starts, missing final period, slang and
-  emoji are all left alone). *Proofread Formal* also rewrites the text into a polished formal
-  register — it may swap casual words for formal ones and tighten phrasing, but keeps your
-  meaning and adds nothing.
+  emoji are all left alone). It also repairs word order that is unnatural for the output
+  language — e.g. a Russian-style trailing adverb in an English sentence — but never
+  reshuffles a sentence that already reads natively. *Proofread Formal* also rewrites the
+  text into a polished formal register — it may swap casual words for formal ones and
+  tighten phrasing, but keeps your meaning and adds nothing.
 - **Output language** (preference). By default (`auto`) the result stays in the text's own
   language. Set **Proofread Output Language** to a language name (e.g. `English`) and both
   commands always produce that language: text already in it is simply proofread, anything else
@@ -211,7 +213,8 @@ npm run eval -- --help                       # all flags
 Some cases carry a programmatic auto-check (translate: block absent / terms kept / auth error;
 proofread: informal register kept, no trailing period, stays in the source language, foreign
 fragment folded in, loanword kept, protected terms kept, line breaks kept, markup kept, no em
-dash introduced, auth error); the rest are printed for eyeballing. Without a key only the
+dash introduced, calqued word order fixed but natural order untouched, auth error); the rest
+are printed for eyeballing. Without a key only the
 empty-key cases run — the rest are `SKIP`. Env key: `GEMINI_API_KEY`.
 
 ## Architecture

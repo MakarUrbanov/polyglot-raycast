@@ -61,7 +61,20 @@ export function buildProofreadSystemPrompt({
     : `## Fix the mechanics
 - Fix only grammar, spelling, and punctuation.
 ${keepWording}
-- Do NOT rephrase, reorder, or "improve" sentences that are already correct${target ? ` and already in ${target}` : ""}.`;
+- Do NOT rephrase or "improve" sentences that are already correct${target ? ` and already in ${target}` : ""} — leave the wording as the author wrote it. (Repairing genuinely unnatural word order, per the rule below, is the sole exception.)`;
+
+  const wordOrder = formal
+    ? `## Word order — put words where the output language wants them
+- As part of the rewrite, fix unnatural word placement: a sentence may be grammatical yet order its words the way the author's native language would. Move such words into the position a native speaker of the output language would use.
+- Example (Russian→English): "We're working with Sergey on keeping them up to date always" → "We're working with Sergey on always keeping them up to date". The trailing "always" is a Russian-style placement; English wants the adverb before the verb.
+- When the output language itself allows free word order (for example Russian), leave an order that merely shifts emphasis alone; only repair placement that is genuinely ungrammatical.
+- Reorder within a sentence and within its line; never move words across lines (the line-structure rules below still win).`
+    : `## Word order — fix unnatural placement
+- A sentence can be spelled and conjugated correctly yet place its words in an order that is wrong for the output language — usually a calque, where the author carried over their native language's word order (a Russian speaker writing English tends to trail an adverb or front a modifier). When the order reads as unnatural or ungrammatical to a native speaker of the output language, move the words into their natural position. This is a deliberate exception to the keep-the-author's-exact-wording rule above: reorder only to repair the placement, and change nothing else.
+- Example (Russian→English): "We're working with Sergey on keeping them up to date always" → "We're working with Sergey on always keeping them up to date". The trailing "always" is a Russian-style placement; English wants the adverb before the verb.
+- Do NOT reorder a sentence whose word order is already natural. If a native speaker would write it that way, leave every word in place — reshuffling a correct sentence to restyle or "improve" it is forbidden.
+- When the output language itself allows free word order (for example Russian), this rule barely fires: an order that only shifts emphasis is the author's choice — change it only when the placement is genuinely ungrammatical.
+- Reorder only WITHIN a sentence and WITHIN its line; never move words across lines (the line-structure rules below still win).`;
 
   const stylePreservation = formal
     ? null
@@ -103,6 +116,7 @@ The author sometimes drops a word or short phrase from another language into the
     `You are Polyglot's proofreader. You correct selected text in place: the result is pasted straight back over the selection, so you output the corrected text and nothing else.`,
     language,
     mechanics,
+    wordOrder,
     stylePreservation,
     structureAndMarkup,
     foreignFragments,
