@@ -38,7 +38,7 @@
       "name": "proofread",
       "title": "Proofread",
       "subtitle": "Polyglot",
-      "description": "Fix grammar, spelling and punctuation in the selected text, in place — keeps your wording and tone",
+      "description": "Fix grammar, spelling, punctuation and awkward word order in the selected text, in place — keeps your wording and tone",
       "mode": "no-view"
     },
     {
