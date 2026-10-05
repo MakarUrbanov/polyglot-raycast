@@ -2,17 +2,19 @@
   "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "polyglot",
   "title": "Polyglot",
-  "description": "Bilingual RU⇄EN translator that detects the direction itself and adds a learning breakdown, plus in-place proofreading (casual and formal) for the selected text in any app",
+  "description": "Bilingual RU⇄EN translator (OpenAI or Gemini) that detects the direction itself and streams a learning breakdown, plus in-place proofreading (casual and formal) for the selected text in any app",
   "icon": "extension-icon.png",
   "author": "makarurbanov",
-  "categories": ["Productivity"],
+  "categories": [
+    "Productivity"
+  ],
   "license": "MIT",
   "commands": [
     {
       "name": "translate",
       "title": "Translate",
       "subtitle": "Polyglot",
-      "description": "Translate RU⇄EN with automatic direction and an explanation block",
+      "description": "Translate RU⇄EN with automatic direction and an explanation block — streamed, all at once, or on demand",
       "mode": "view",
       "preferences": [
         {
@@ -27,10 +29,32 @@
           "name": "alwaysExplain",
           "title": "Always Explain",
           "label": "Always show the explanation block",
-          "description": "Force the block even for simple, unambiguous phrases (overrides the automatic display rules)",
+          "description": "Force the block even for simple, unambiguous phrases (overrides the automatic display rules). Applies to the Stream and All at once modes; On demand always explains when asked.",
           "type": "checkbox",
           "required": false,
           "default": false
+        },
+        {
+          "name": "explanationMode",
+          "title": "Explanation Mode",
+          "description": "How the explanation block arrives. Stream: the translation appears as soon as it streams, the explanation streams in below it. All at once: wait for the full result. On demand: translation only; press Enter on the result to generate the explanation.",
+          "type": "dropdown",
+          "required": false,
+          "default": "stream",
+          "data": [
+            {
+              "title": "Stream (translation first, explanation follows)",
+              "value": "stream"
+            },
+            {
+              "title": "All at once (wait for the full result)",
+              "value": "all"
+            },
+            {
+              "title": "On demand (press Enter to explain)",
+              "value": "onDemand"
+            }
+          ]
         }
       ]
     },
@@ -51,16 +75,49 @@
   ],
   "preferences": [
     {
+      "name": "provider",
+      "title": "Provider",
+      "description": "Which service runs Translate and Proofread. Both keys can be stored; this switch picks the active one.",
+      "type": "dropdown",
+      "required": false,
+      "default": "openai",
+      "data": [
+        {
+          "title": "OpenAI",
+          "value": "openai"
+        },
+        {
+          "title": "Google Gemini",
+          "value": "gemini"
+        }
+      ]
+    },
+    {
+      "name": "openaiApiKey",
+      "title": "OpenAI API Key",
+      "description": "Used when Provider = OpenAI. Create one at platform.openai.com/api-keys (paid API usage)",
+      "type": "password",
+      "required": false
+    },
+    {
+      "name": "openaiModel",
+      "title": "OpenAI Model",
+      "description": "Used when Provider = OpenAI. OpenAI model ID; must accept reasoning effort \"none\". Default gpt-6-luna",
+      "type": "textfield",
+      "required": false,
+      "default": "gpt-6-luna"
+    },
+    {
       "name": "apiKey",
       "title": "Gemini API Key",
-      "description": "Free key — aistudio.google.com → Get API key (free tier)",
+      "description": "Used when Provider = Gemini. Free key — aistudio.google.com → Get API key (free tier)",
       "type": "password",
       "required": false
     },
     {
       "name": "model",
       "title": "Gemini Model",
-      "description": "Gemini model ID. Default gemini-2.5-flash. Free tier: gemini-2.5-flash, gemini-2.5-flash-lite, gemini-3.5-flash",
+      "description": "Used when Provider = Gemini. Gemini model ID. Default gemini-2.5-flash. Free tier: gemini-2.5-flash, gemini-2.5-flash-lite, gemini-3.5-flash",
       "type": "textfield",
       "required": false,
       "default": "gemini-2.5-flash"
@@ -81,9 +138,18 @@
       "required": false,
       "default": "plain",
       "data": [
-        { "title": "Plain (Shift+Cmd+V, match style)", "value": "plain" },
-        { "title": "Normal (Cmd+V, keep formatting)", "value": "normal" },
-        { "title": "Copy only (don't paste)", "value": "copy" }
+        {
+          "title": "Plain (Shift+Cmd+V, match style)",
+          "value": "plain"
+        },
+        {
+          "title": "Normal (Cmd+V, keep formatting)",
+          "value": "normal"
+        },
+        {
+          "title": "Copy only (don't paste)",
+          "value": "copy"
+        }
       ]
     }
   ],
@@ -105,6 +171,7 @@
     "dev": "ray develop",
     "lint": "ray lint",
     "fix-lint": "ray lint --fix",
-    "eval": "tsx scripts/eval.ts"
+    "eval": "tsx scripts/eval.ts",
+    "check": "tsx scripts/check-stream.ts"
   }
 }

@@ -21,8 +21,8 @@ import {
   showHUD,
 } from "@raycast/api";
 import { runAppleScript } from "@raycast/utils";
-import { DEFAULT_MODEL, proofread } from "./providers";
-import type { ProofreadOptions } from "./providers/types";
+import { PROVIDERS, proofread, toProviderId } from "./providers";
+import type { ProofreadOptions, ProviderId } from "./providers/types";
 import { asProviderError, type ProviderError } from "./lib/errors";
 
 /** Refuse selections larger than this so a truncated paste can't clobber them. */
@@ -35,9 +35,14 @@ type PasteMode = "plain" | "normal" | "copy";
 function resolveOptions(formal: boolean): ProofreadOptions {
   const prefs = getPreferenceValues<Preferences>();
   const language = (prefs.outputLanguage ?? "").trim();
+  const provider = toProviderId(prefs.provider);
+  const openai = provider === "openai";
+  const apiKey = openai ? prefs.openaiApiKey : prefs.apiKey;
+  const model = openai ? prefs.openaiModel : prefs.model;
   return {
-    apiKey: (prefs.apiKey ?? "").trim(),
-    model: (prefs.model ?? "").trim() || DEFAULT_MODEL,
+    provider,
+    apiKey: (apiKey ?? "").trim(),
+    model: (model ?? "").trim() || PROVIDERS[provider].defaultModel,
     formal,
     outputLanguage: /^auto$/i.test(language)
       ? undefined
@@ -96,28 +101,32 @@ async function readInput(): Promise<{ text: string; fromSelection: boolean }> {
 }
 
 /** Short, human HUD message for a failed run. */
-function hudForError(error: ProviderError): string {
+function hudForError(error: ProviderError, provider: ProviderId): string {
+  const { label } = PROVIDERS[provider];
   switch (error.kind) {
     case "empty":
       return "⚠️ Nothing to proofread — select some text or copy it first";
     case "auth":
-      return "⚠️ Set your Gemini API key in the extension preferences";
+      return provider === "openai"
+        ? "⚠️ Set your OpenAI API key in the extension preferences, or switch Provider to Gemini"
+        : "⚠️ Set your Gemini API key in the extension preferences";
     case "rateLimit":
       return "⚠️ Rate limit — wait a few seconds and try again";
     case "timeout":
-      return "⚠️ Gemini timed out — try again";
+      return `⚠️ ${label} timed out — try again`;
     case "network":
-      return "⚠️ No connection to Gemini";
+      return `⚠️ No connection to ${label}`;
     case "parse":
-      return "⚠️ Gemini returned an empty response — try again";
+      return `⚠️ ${label} returned an empty response — try again`;
     case "api":
-      return "⚠️ Gemini error — check the extension and try again";
+      return `⚠️ ${label} error — check the extension and try again`;
   }
 }
 
 /** Entry point shared by both no-view commands. */
 export async function runProofread(formal: boolean): Promise<void> {
   const label = formal ? "Proofread Formal" : "Proofread";
+  const options = resolveOptions(formal);
   try {
     const { text: rawInput, fromSelection } = await readInput();
 
@@ -140,7 +149,7 @@ export async function runProofread(formal: boolean): Promise<void> {
     }
 
     await showHUD(`${label}…`);
-    const { text: corrected } = await proofread(core, resolveOptions(formal));
+    const { text: corrected } = await proofread(core, options);
 
     const mode = resolvePasteMode();
     if (fromSelection && mode !== "copy") {
@@ -153,7 +162,7 @@ export async function runProofread(formal: boolean): Promise<void> {
     }
   } catch (caught) {
     const error = asProviderError(caught);
-    await showHUD(hudForError(error));
+    await showHUD(hudForError(error, options.provider));
     if (error.kind === "auth") {
       await openExtensionPreferences();
     }
