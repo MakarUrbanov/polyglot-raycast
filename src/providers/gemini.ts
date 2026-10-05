@@ -1,135 +1,178 @@
-/** Google Gemini generateContent. The key goes in the x-goog-api-key header (not the URL).
- *  Translate asks for JSON via responseMimeType; proofread asks for plain text with
- *  thinking disabled and a generous output cap. Both go through callGemini(). */
+/** Google Gemini streamGenerateContent (SSE) for every flow — proofread too,
+ *  so a long healthy reply is never cut by a total timeout. The key goes in the
+ *  x-goog-api-key header (not the URL). Plain-text output, with thinking turned
+ *  as low as the model family allows (thinkingFor). */
 
-import {
-  buildTranslateSystemPrompt,
-  buildTranslateUserPrompt,
-} from "../prompts/translate";
-import {
-  buildProofreadSystemPrompt,
-  buildProofreadUserPrompt,
-} from "../prompts/proofread";
-import { postJson } from "../lib/http";
-import { parseProofreadOutput, parseTranslateOutput } from "../lib/parse";
+import { postStream } from "../lib/http";
 import { ProviderError } from "../lib/errors";
-import type {
-  BaseOptions,
-  ProofreadOptions,
-  ProofreadResult,
-  TranslateOptions,
-  TranslateResult,
-} from "./types";
+import type { Backend, CallArgs, CallResult, Finish } from "./types";
+
+const LABEL = "Gemini";
+
+/**
+ * Output-token headroom for thought tokens, which Gemini counts against
+ * maxOutputTokens. ESTIMATE — not measured: "low"/"minimal" thinking is
+ * reported in the low thousands of tokens; 8192 leaves margin.
+ */
+export const THINKING_HEADROOM = 8192;
 
 function endpoint(model: string): string {
   // `model` comes from a user-editable preference; encodeURIComponent keeps it
   // inside the path segment (no host/path injection).
-  return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
 }
 
 interface GeminiResponse {
   candidates?: Array<{
-    content?: { parts?: Array<{ text?: string }> };
+    content?: { parts?: Array<{ text?: string; thought?: boolean }> };
     finishReason?: string;
   }>;
   promptFeedback?: { blockReason?: string };
+  error?: { message?: string; status?: string };
 }
 
-interface CallArgs {
-  system: string;
-  user: string;
-  generationConfig: Record<string, unknown>;
-  opts: BaseOptions;
+/**
+ * Thinking config per model family (docs: ai.google.dev/gemini-api/docs/
+ * generate-content/thinking). 2.5 models take a budget (thinkingLevel is an
+ * error there): 0 turns it off, except on 2.5 Pro, which cannot turn it off
+ * and takes its documented minimum, 128. 3.x take a level: "minimal" where the
+ * docs list it (3, 3.5, 3.6 Flash; 3.1 and 3.5 Flash-Lite), "low" elsewhere
+ * ("minimal" is an error on 3.7/3.8 Flash and 3.1 Pro). Unknown ids (aliases,
+ * 2.0) get no config so the request stays valid.
+ */
+export function thinkingFor(
+  model: string,
+): Record<string, unknown> | undefined {
+  const id = model.trim().toLowerCase();
+  if (/^gemini-2\.5-pro/.test(id)) {
+    return { thinkingBudget: 128 };
+  }
+  if (/^gemini-2\.5-/.test(id)) {
+    return { thinkingBudget: 0 };
+  }
+  if (
+    /^gemini-3\.[15]-flash-lite/.test(id) ||
+    /^gemini-3(\.[56])?-flash(?!-lite)/.test(id)
+  ) {
+    return { thinkingLevel: "minimal" };
+  }
+  if (/^gemini-([3-9]|\d{2,})(\.|-)/.test(id)) {
+    return { thinkingLevel: "low" };
+  }
+  return undefined;
 }
 
-interface CallResult {
-  text: string;
-  /** Gemini's finishReason for the candidate ("STOP" on a normal completion). */
-  finishReason?: string;
+/** True when the config turns thinking fully off (budget 0). */
+function isThinkingOff(config: Record<string, unknown> | undefined): boolean {
+  return config?.thinkingBudget === 0;
 }
 
-/** Shared request mechanics: build the body, POST, unwrap, return the raw text. */
-async function callGemini(args: CallArgs): Promise<CallResult> {
-  const { system, user, generationConfig, opts } = args;
-  const body = {
-    systemInstruction: { parts: [{ text: system }] },
-    contents: [{ role: "user", parts: [{ text: user }] }],
-    generationConfig,
+/** `args.maxTokens` is the visible-text budget; thinking headroom goes on top. */
+export function buildBody(args: CallArgs): Record<string, unknown> {
+  const thinkingConfig = thinkingFor(args.opts.model);
+  const headroom = isThinkingOff(thinkingConfig) ? 0 : THINKING_HEADROOM;
+  return {
+    systemInstruction: { parts: [{ text: args.system }] },
+    contents: [{ role: "user", parts: [{ text: args.user }] }],
+    generationConfig: {
+      maxOutputTokens: args.maxTokens + headroom,
+      ...(thinkingConfig ? { thinkingConfig } : {}),
+    },
   };
+}
 
-  const json = (await postJson({
-    url: endpoint(opts.model),
-    headers: { "x-goog-api-key": opts.apiKey },
-    body,
-    label: "Gemini",
-    signal: opts.signal,
-  })) as GeminiResponse;
+function finishFrom(reason: string): Finish {
+  switch (reason) {
+    case "STOP":
+      return "done";
+    case "MAX_TOKENS":
+      return "truncated";
+    case "SAFETY":
+    case "RECITATION":
+      return "blocked";
+    default:
+      return "other";
+  }
+}
 
+/** Throw on a blocked prompt or an error object; return the chunk's visible text. */
+function readChunk(json: GeminiResponse): string {
+  if (json.error) {
+    throw new ProviderError(
+      "api",
+      `Gemini API error: ${json.error.status ?? json.error.message ?? "unknown"}.`,
+      { cause: json.error },
+    );
+  }
   if (json.promptFeedback?.blockReason) {
     throw new ProviderError(
       "api",
       `Gemini blocked the request: ${json.promptFeedback.blockReason}.`,
     );
   }
-
-  const candidate = json.candidates?.[0];
-  const text = (candidate?.content?.parts ?? [])
+  return (json.candidates?.[0]?.content?.parts ?? [])
+    .filter((part) => !part.thought)
     .map((part) => part.text ?? "")
     .join("");
-  if (text.trim() === "") {
-    throw new ProviderError("parse", "Gemini returned an empty response.");
-  }
-  return { text, finishReason: candidate?.finishReason };
 }
 
 /**
- * Output-token budget for proofread. Cyrillic tokenizes to more tokens per
- * character than Latin, so estimate ~1 token per 2 chars and double it (×3 for
- * formal mode, which expands the text). A too-small cap risks a truncated
- * paste — the dangerous failure — so err generous. Clamped to [512, 8192].
+ * Fold one streamed chunk into the running state. Exported for the offline
+ * check (scripts/check-stream.ts).
  */
-function outputCap(input: string, formal: boolean): number {
-  return Math.min(
-    8192,
-    Math.max(512, Math.ceil(input.length / 2) * (formal ? 3 : 2)),
-  );
-}
-
-export async function translateWithGemini(
-  input: string,
-  opts: TranslateOptions,
-): Promise<TranslateResult> {
-  const { text } = await callGemini({
-    system: buildTranslateSystemPrompt(opts),
-    user: buildTranslateUserPrompt(input),
-    generationConfig: { responseMimeType: "application/json" },
-    opts,
-  });
-  return parseTranslateOutput(text);
-}
-
-export async function proofreadWithGemini(
-  input: string,
-  opts: ProofreadOptions,
-): Promise<ProofreadResult> {
-  const { text, finishReason } = await callGemini({
-    system: buildProofreadSystemPrompt({
-      formal: opts.formal,
-      outputLanguage: opts.outputLanguage,
-    }),
-    user: buildProofreadUserPrompt(input),
-    generationConfig: {
-      thinkingConfig: { thinkingBudget: 0 },
-      maxOutputTokens: outputCap(input, opts.formal),
-    },
-    opts,
-  });
-  // A cut-short result (MAX_TOKENS, SAFETY, ...) must never reach the paste.
-  if (finishReason && finishReason !== "STOP") {
+export function foldGeminiChunk(
+  data: string,
+  onText: (delta: string) => void,
+): { reason?: string } {
+  let json: GeminiResponse;
+  try {
+    json = JSON.parse(data) as GeminiResponse;
+  } catch (cause) {
     throw new ProviderError(
-      "api",
-      `Gemini stopped early (${finishReason}) — the result would be incomplete.`,
+      "parse",
+      "Gemini sent an unreadable stream chunk.",
+      { cause },
     );
   }
-  return parseProofreadOutput(text, input);
+  const text = readChunk(json);
+  if (text !== "") {
+    onText(text);
+  }
+  return { reason: json.candidates?.[0]?.finishReason };
 }
+
+function emptyGuard(text: string): void {
+  if (text.trim() === "") {
+    throw new ProviderError("parse", "Gemini returned an empty response.");
+  }
+}
+
+async function streamGemini(
+  args: CallArgs,
+  onText: (delta: string) => void,
+): Promise<CallResult> {
+  let text = "";
+  let reason: string | undefined;
+  await postStream({
+    url: endpoint(args.opts.model),
+    headers: { "x-goog-api-key": args.opts.apiKey },
+    body: buildBody(args),
+    label: LABEL,
+    signal: args.opts.signal,
+    onEvent: (data) => {
+      const chunk = foldGeminiChunk(data, (delta) => {
+        text += delta;
+        onText(delta);
+      });
+      reason = chunk.reason ?? reason;
+    },
+  });
+  emptyGuard(text);
+  // The last chunk carries finishReason; a stream that ended without one was cut.
+  if (reason === undefined) {
+    return { text, finish: "other", reason: "stream ended early" };
+  }
+  return { text, finish: finishFrom(reason), reason };
+}
+
+export const gemini: Backend = { stream: streamGemini };

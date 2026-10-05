@@ -1,13 +1,13 @@
 /**
- * Headless run of the test cases, bypassing the Raycast UI (Gemini only).
+ * Headless run of the test cases, bypassing the Raycast UI (OpenAI or Gemini).
  *
  * Validates the prompt LOGIC (the main risk) directly through the core
  * `translate()` / `proofread()`, without the Raycast modal and without
- * preferences. The key comes from the GEMINI_API_KEY env var.
+ * preferences. The provider comes from --provider (default gemini); the key
+ * from GEMINI_API_KEY or OPENAI_API_KEY to match.
  *
  * Two suites: `translate` (the RU⇄EN flip + explanation block) and `proofread`
- * (in-place correction, casual or formal). `--suite translate` reproduces the
- * old behavior exactly.
+ * (in-place correction, casual or formal).
  *
  * Usage:
  *   GEMINI_API_KEY=...  npm run eval                          # both suites
@@ -15,22 +15,29 @@
  *   GEMINI_API_KEY=...  npm run eval -- --suite proofread --formal
  *   GEMINI_API_KEY=...  npm run eval -- --suite translate --case 6
  *   npm run eval -- --list                                    # list both suites
+ *   OPENAI_API_KEY=...  npm run eval -- --provider openai     # same cases on OpenAI
  *   npm run eval -- --suite proofread --case 11               # "no key" — works keyless
  *
- * Flags: --suite <translate|proofread|all>  --case <N>  --formal
- *        --lang <Language>  --always  --model <id>  --list  --help
+ * Flags: --provider <gemini|openai>  --suite <translate|proofread|all>  --case <N>
+ *        --formal  --part <full|translation>  --lang <Language>  --always
+ *        --model <id>  --list  --help
  */
 
-import { DEFAULT_MODEL, proofread, translate } from "../src/providers";
+import { PROVIDERS, proofread, translate } from "../src/providers";
 import type {
   ProofreadOptions,
   ProofreadResult,
+  ProviderId,
   TranslateOptions,
+  TranslatePart,
   TranslateResult,
 } from "../src/providers/types";
 import { asProviderError } from "../src/lib/errors";
 
-const ENV_KEY = "GEMINI_API_KEY";
+const ENV_KEYS: Record<ProviderId, string> = {
+  gemini: "GEMINI_API_KEY",
+  openai: "OPENAI_API_KEY",
+};
 
 // --- tiny ANSI helper --------------------------------------------------------
 const useColor = process.stdout.isTTY;
@@ -46,7 +53,10 @@ const cyan = (s: string) => paint("36", s);
 type Suite = "translate" | "proofread" | "all";
 
 interface Args {
+  provider: ProviderId;
   suite: Suite;
+  /** Translate request kind: full (translation + block) or translation only. */
+  part: TranslatePart;
   caseNo?: number;
   lang?: string;
   model?: string;
@@ -59,12 +69,38 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { suite: "all", formal: false, always: false, list: false, help: false };
+  const args: Args = {
+    provider: "gemini",
+    suite: "all",
+    part: "full",
+    formal: false,
+    always: false,
+    list: false,
+    help: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const valueOf = (inline?: string) => inline ?? argv[++i];
     const [flag, inline] = a.includes("=") ? [a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1)] : [a, undefined];
     switch (flag) {
+      case "--provider": {
+        const value = valueOf(inline);
+        if (value !== "gemini" && value !== "openai") {
+          console.error(red(`Unknown provider: ${value} (use gemini|openai)`));
+          process.exit(1);
+        }
+        args.provider = value;
+        break;
+      }
+      case "--part": {
+        const value = valueOf(inline);
+        if (value !== "full" && value !== "translation") {
+          console.error(red(`Unknown part: ${value} (use full|translation)`));
+          process.exit(1);
+        }
+        args.part = value;
+        break;
+      }
       case "--suite": {
         const value = valueOf(inline);
         if (value !== "translate" && value !== "proofread" && value !== "all") {
@@ -176,9 +212,9 @@ const TRANSLATE_CASES: TranslateCase[] = [
   },
   {
     n: 8,
-    title: "Empty Gemini key",
+    title: "Empty API key",
     input: "test",
-    expect: "Core throws ProviderError kind=auth (UI leads to preferences). Works without a key.",
+    expect: "Core throws ProviderError kind=auth naming the active provider (UI leads to preferences). Works without a key.",
     special: "emptyKey",
     check: () => ({ ok: true, note: "" }),
   },
@@ -325,9 +361,9 @@ const PROOFREAD_CASES: ProofreadCase[] = [
   },
   {
     n: 11,
-    title: "Empty Gemini key",
+    title: "Empty API key",
     input: "test",
-    expect: "Core throws ProviderError kind=auth (HUD leads to preferences). Works without a key.",
+    expect: "Core throws ProviderError kind=auth naming the active provider (HUD leads to preferences). Works without a key.",
     special: "emptyKey",
     check: () => ({ ok: true, note: "" }),
   },
@@ -489,6 +525,9 @@ function printTranslateResult(r: TranslateResult) {
   } else {
     console.log(bold("Block: ") + dim("[no block]"));
   }
+  if (r.cutShort) {
+    console.log(yellow(`Cut short: ${r.cutShort}`));
+  }
 }
 
 function printProofreadResult(r: ProofreadResult) {
@@ -512,7 +551,14 @@ function flipLang(lang: string): string {
 }
 
 // --- runners -----------------------------------------------------------------
-async function runTranslateCase(c: TranslateCase, base: TranslateOptions, hasKey: boolean) {
+/** The empty-key case passes on kind=auth AND a message naming the provider. */
+function authVerdict(e: unknown, provider: ProviderId) {
+  const err = asProviderError(e);
+  const named = err.message.includes(PROVIDERS[provider].label);
+  verdict(err.kind === "auth" && named, `kind=${err.kind}: ${err.message}`);
+}
+
+async function runTranslateCase(c: TranslateCase, base: TranslateOptions, hasKey: boolean, part: TranslatePart) {
   caseHeader("TRANSLATE", c.n, c.title, c.input, c.expect);
 
   // The "empty key" case does not need a real key.
@@ -521,14 +567,13 @@ async function runTranslateCase(c: TranslateCase, base: TranslateOptions, hasKey
       await translate(c.input, { ...base, apiKey: "" });
       verdict(false, "expected an auth error, but the request went through");
     } catch (e) {
-      const err = asProviderError(e);
-      verdict(err.kind === "auth", `kind=${err.kind}: ${err.message}`);
+      authVerdict(e, base.provider);
     }
     return;
   }
 
   if (!hasKey) {
-    console.log(yellow(`SKIP: no key in env (${ENV_KEY}) — live request skipped.`));
+    console.log(yellow(`SKIP: no key in env (${ENV_KEYS[base.provider]}) — live request skipped.`));
     return;
   }
 
@@ -540,7 +585,7 @@ async function runTranslateCase(c: TranslateCase, base: TranslateOptions, hasKey
 
   try {
     const started = Date.now();
-    const r = await translate(c.input, opts);
+    const r = await translate(c.input, opts, part);
     const ms = Date.now() - started;
     printTranslateResult(r);
     console.log(dim(`(${ms} ms)`));
@@ -562,8 +607,7 @@ async function runProofreadCase(c: ProofreadCase, base: ProofreadOptions, hasKey
       await proofread(c.input, { ...base, apiKey: "" });
       verdict(false, "expected an auth error, but the request went through");
     } catch (e) {
-      const err = asProviderError(e);
-      verdict(err.kind === "auth", `kind=${err.kind}: ${err.message}`);
+      authVerdict(e, base.provider);
     }
     return;
   }
@@ -584,7 +628,7 @@ async function runProofreadCase(c: ProofreadCase, base: ProofreadOptions, hasKey
   }
 
   if (!hasKey) {
-    console.log(yellow(`SKIP: no key in env (${ENV_KEY}) — live request skipped.`));
+    console.log(yellow(`SKIP: no key in env (${ENV_KEYS[base.provider]}) — live request skipped.`));
     return;
   }
 
@@ -623,24 +667,27 @@ function printList() {
 }
 
 function printHelp() {
-  console.log(`Polyglot eval — run the test cases without the Raycast UI (Gemini only).
+  console.log(`Polyglot eval — run the test cases without the Raycast UI (OpenAI or Gemini).
 
 Flags:
+  --provider <name>    gemini | openai (default: gemini); key from ${ENV_KEYS.gemini} / ${ENV_KEYS.openai}
   --suite <name>       translate | proofread | all (default: all)
   --case <N>           a single case number within the selected suite(s)
   --formal             proofread suite runs in formal mode (enables case 9, skips casual-only cases)
   --to <Language>      proofread target language (e.g. English); default auto = keep the input's language
+  --part <name>        translate request: full (translation + block) | translation (on-demand first request)
   --lang <Language>    translate block language (default: Russian)
   --always             translate alwaysExplain = true
-  --model <id>         override the Gemini model (both suites)
+  --model <id>         override the provider's model (both suites)
   --list               list the cases of both suites
   --help               this help
 
-Key via env: ${ENV_KEY}
+Key via env: ${ENV_KEYS.gemini} (gemini) or ${ENV_KEYS.openai} (openai)
 Examples:
-  ${ENV_KEY}=xxx npm run eval -- --suite translate --case 6
-  ${ENV_KEY}=xxx npm run eval -- --suite proofread --formal
-  ${ENV_KEY}=xxx npm run eval -- --suite proofread --to English
+  ${ENV_KEYS.gemini}=xxx npm run eval -- --suite translate --case 6
+  ${ENV_KEYS.gemini}=xxx npm run eval -- --suite proofread --formal
+  ${ENV_KEYS.gemini}=xxx npm run eval -- --suite proofread --to English
+  ${ENV_KEYS.openai}=xxx npm run eval -- --provider openai --suite translate --part translation
   npm run eval -- --suite proofread --case 11   # empty-key case, works keyless`);
 }
 
@@ -655,16 +702,19 @@ interface Bases {
 }
 
 function buildBases(args: Args, apiKey: string): Bases {
-  const model = args.model ?? DEFAULT_MODEL;
+  const provider = args.provider;
+  const model = args.model ?? PROVIDERS[provider].defaultModel;
   const toLang = args.to?.trim();
   return {
     translate: {
+      provider,
       apiKey,
       model,
       explanationLanguage: args.lang ?? process.env.POLYGLOT_EXPLANATION_LANGUAGE ?? "Russian",
       alwaysExplain: args.always,
     },
     proofread: {
+      provider,
       apiKey,
       model,
       formal: args.formal,
@@ -674,18 +724,19 @@ function buildBases(args: Args, apiKey: string): Bases {
 }
 
 function printHeader(args: Args, bases: Bases, hasKey: boolean, wantTranslate: boolean, wantProofread: boolean) {
-  console.log(bold("Polyglot eval — Gemini"));
+  console.log(bold(`Polyglot eval — ${PROVIDERS[args.provider].label}`));
   console.log(dim("Suite:        ") + args.suite);
   console.log(dim("Model:        ") + bases.translate.model);
   if (wantTranslate) {
     console.log(dim("Block lang:   ") + bases.translate.explanationLanguage);
     console.log(dim("alwaysExplain:") + ` ${bases.translate.alwaysExplain}`);
+    console.log(dim("Part:         ") + args.part);
   }
   if (wantProofread) {
     console.log(dim("Proofread:    ") + (args.formal ? "formal" : "casual"));
     console.log(dim("Target lang:  ") + (bases.proofread.outputLanguage ?? "auto"));
   }
-  console.log(dim("Key:          ") + (hasKey ? green("set") : red(`missing (${ENV_KEY})`)));
+  console.log(dim("Key:          ") + (hasKey ? green("set") : red(`missing (${ENV_KEYS[args.provider]})`)));
   if (!hasKey) {
     console.log(yellow("Without a key only the empty-key cases run; the rest are SKIP."));
   }
@@ -702,7 +753,7 @@ async function main() {
     return;
   }
 
-  const apiKey = (process.env[ENV_KEY] ?? "").trim();
+  const apiKey = (process.env[ENV_KEYS[args.provider]] ?? "").trim();
   const hasKey = apiKey !== "";
   const bases = buildBases(args, apiKey);
   const wantTranslate = args.suite === "translate" || args.suite === "all";
@@ -718,7 +769,7 @@ async function main() {
   }
 
   for (const c of translateSelected) {
-    await runTranslateCase(c, bases.translate, hasKey);
+    await runTranslateCase(c, bases.translate, hasKey, args.part);
   }
   for (const c of proofreadSelected) {
     await runProofreadCase(c, bases.proofread, hasKey);

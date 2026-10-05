@@ -4,60 +4,105 @@ import {
   Detail,
   Form,
   Icon,
+  Toast,
   getPreferenceValues,
   openExtensionPreferences,
+  showToast,
   useNavigation,
 } from "@raycast/api";
 import { showFailureToast } from "@raycast/utils";
-import { useEffect, useState } from "react";
-import { DEFAULT_MODEL, translate } from "./providers";
-import type { TranslateOptions, TranslateResult } from "./providers/types";
-import {
-  ProviderError,
-  type ProviderErrorKind,
-  asProviderError,
-} from "./lib/errors";
+import { useEffect, useRef, useState } from "react";
+import { PROVIDERS, explain, toProviderId, translate } from "./providers";
+import type {
+  ExplainResult,
+  ProviderId,
+  TranslateOptions,
+  TranslateProgress,
+  TranslateResult,
+} from "./providers/types";
+import { ProviderError, asProviderError } from "./lib/errors";
+import { defangImages } from "./lib/markdown";
 
-const API_KEY_URL = "https://aistudio.google.com/app/apikey";
+/** How the explanation block arrives (the explanationMode preference). */
+type Mode = "stream" | "all" | "onDemand";
+
+/** At most one streamed re-render per this many ms (ESTIMATE, not measured). */
+const RENDER_MS = 100;
 
 /** Resolve preferences (manifest -> raycast-env.d.ts) into core options. */
 function resolveOptions(): TranslateOptions {
   const prefs = getPreferenceValues<Preferences.Translate>();
+  const provider = toProviderId(prefs.provider);
+  const openai = provider === "openai";
+  const apiKey = openai ? prefs.openaiApiKey : prefs.apiKey;
+  const model = openai ? prefs.openaiModel : prefs.model;
   return {
-    apiKey: (prefs.apiKey ?? "").trim(),
-    model: (prefs.model ?? "").trim() || DEFAULT_MODEL,
+    provider,
+    apiKey: (apiKey ?? "").trim(),
+    model: (model ?? "").trim() || PROVIDERS[provider].defaultModel,
     explanationLanguage: (prefs.explanationLanguage ?? "").trim() || "Russian",
     alwaysExplain: Boolean(prefs.alwaysExplain),
   };
 }
 
-/**
- * Defang markdown images in model-derived text before rendering. Detail loads
- * `![](url)` images automatically, which would beacon out to a URL the model
- * (i.e. arbitrary input) can choose. Escaping `![` turns it into a plain,
- * click-only link instead of an auto-loaded image.
- */
-function defangImages(markdown: string): string {
-  return markdown.replace(/!\[/g, "\\![");
+function resolveMode(): Mode {
+  const mode = getPreferenceValues<Preferences.Translate>().explanationMode;
+  return mode === "all" || mode === "onDemand" ? mode : "stream";
+}
+
+/** Coalesce rapid stream updates into one re-render per `ms`. */
+function createThrottle<T>(apply: (value: T) => void, ms: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const latest: { value?: T } = {};
+  return {
+    push(value: T) {
+      latest.value = value;
+      if (timer === undefined) {
+        timer = setTimeout(() => {
+          timer = undefined;
+          apply(latest.value as T);
+        }, ms);
+      }
+    },
+    cancel() {
+      clearTimeout(timer);
+      timer = undefined;
+    },
+  };
 }
 
 type ViewState =
   | { status: "loading" }
-  | { status: "ok"; result: TranslateResult }
+  | { status: "streaming"; progress: TranslateProgress }
+  | { status: "ok"; result: TranslateResult; failure?: ProviderError }
   | { status: "error"; error: ProviderError };
 
-function composeResult(result: TranslateResult): string {
-  return result.explanation
-    ? `${result.translation}\n\n---\n\n${result.explanation}`
-    : result.translation;
+/**
+ * The on-demand explain request (second request, fired by Enter). Its result
+ * is kept here, apart from the translation's, so neither cutShort overwrites
+ * the other.
+ */
+type ExplainState =
+  | { status: "idle" }
+  | { status: "running"; partial: string }
+  | { status: "error"; error: ProviderError; partial: string }
+  | { status: "done"; result: ExplainResult };
+
+const SEPARATOR = "\n\n---\n\n";
+const EXPLAINING = "_Explaining…_";
+const HINT = "_Press **↵ Enter** to explain this translation._";
+
+/** What the copy action puts on the clipboard (no notes, no hints). */
+function composeResult(translation: string, explanation: string | null) {
+  return explanation ? `${translation}${SEPARATOR}${explanation}` : translation;
 }
 
-function errorTitle(error: ProviderError): string {
+function errorTitle(error: ProviderError, provider: ProviderId): string {
   switch (error.kind) {
     case "empty":
       return "Empty input";
     case "auth":
-      return "Gemini API key required";
+      return `${PROVIDERS[provider].label} API key required`;
     case "rateLimit":
       return "Rate limit";
     case "timeout":
@@ -71,19 +116,34 @@ function errorTitle(error: ProviderError): string {
   }
 }
 
-const ERROR_HINTS: Record<ProviderErrorKind, string> = {
-  empty: "Enter some text and try again.",
-  auth: `A Gemini API key is required — it's **free**: get one at [aistudio.google.com](${API_KEY_URL}) (Get API key) and paste it into the extension preferences.`,
-  rateLimit: "Too many requests. Wait a few seconds and try again.",
-  timeout:
-    "Gemini did not respond within 30 seconds. Check your connection or try again.",
-  network: "Could not reach Gemini. Check your internet connection.",
-  parse: "Gemini returned an empty or unreadable response. Try again.",
-  api: "Gemini returned an error. Details below.",
-};
+function errorHint(error: ProviderError, provider: ProviderId): string {
+  const { label, keyUrl } = PROVIDERS[provider];
+  switch (error.kind) {
+    case "empty":
+      return "Enter some text and try again.";
+    case "auth":
+      return provider === "openai"
+        ? `An OpenAI API key is required — create one at [platform.openai.com/api-keys](${keyUrl}) and paste it into the extension preferences, or switch **Provider** to Gemini.`
+        : `A Gemini API key is required — it's **free**: get one at [aistudio.google.com](${keyUrl}) (Get API key) and paste it into the extension preferences.`;
+    case "rateLimit":
+      return "Too many requests. Wait a few seconds and try again.";
+    case "timeout":
+      return `${label} stopped sending data. Check your connection or try again.`;
+    case "network":
+      return `Could not reach ${label}. Check your internet connection.`;
+    case "parse":
+      return `${label} returned an empty or unreadable response. Try again.`;
+    case "api":
+      return `${label} returned an error. Details below.`;
+  }
+}
 
-function errorMarkdown(error: ProviderError): string {
-  const lines = [`# ⚠️ ${errorTitle(error)}`, "", ERROR_HINTS[error.kind]];
+function errorMarkdown(error: ProviderError, provider: ProviderId): string {
+  const lines = [
+    `# ⚠️ ${errorTitle(error, provider)}`,
+    "",
+    errorHint(error, provider),
+  ];
   // Only the generic "api" kind carries extra info beyond the hint (the HTTP status).
   if (error.kind === "api") {
     lines.push("", "```", error.message, "```");
@@ -91,68 +151,198 @@ function errorMarkdown(error: ProviderError): string {
   return lines.join("\n");
 }
 
-/** Result screen: the request runs in useEffect; states are loading/ok/error. */
+/** One-line inline note for a failure before any of its text arrived. */
+function failureNote(error: ProviderError, provider: ProviderId): string {
+  return `_⚠️ ${errorTitle(error, provider)}: ${error.message}_`;
+}
+
+/** Inline note for a failure after some text is on screen: that text is partial. */
+function interruptedNote(error: ProviderError): string {
+  return `_⚠️ ${error.message} The text above is incomplete._`;
+}
+
+/** `what` names the cut part: "Translation", "Explanation" or "Response". */
+function cutShortNote(what: string, reason: string): string {
+  return `_⚠️ ${what} cut short (${reason}) — the text above may be incomplete._`;
+}
+
+/** Join the non-empty markdown pieces with blank lines. */
+function joinParts(parts: string[]): string {
+  return parts.filter((part) => part !== "").join("\n\n");
+}
+
+/** What goes under the translation in on-demand mode. */
+function explainTail(explaining: ExplainState, provider: ProviderId): string {
+  switch (explaining.status) {
+    case "idle":
+      return HINT;
+    case "running":
+      return explaining.partial || EXPLAINING;
+    case "error":
+      return joinParts([
+        explaining.partial,
+        explaining.partial === ""
+          ? failureNote(explaining.error, provider)
+          : interruptedNote(explaining.error),
+        "_Press **↵ Enter** to retry._",
+      ]);
+    case "done": {
+      const { explanation, cutShort } = explaining.result;
+      return joinParts([
+        explanation,
+        cutShort ? cutShortNote("Explanation", cutShort) : "",
+      ]);
+    }
+  }
+}
+
+/** A placeholder action: keeps its slot (↵ / ⌘↵) and only explains why not yet. */
+function NotYetAction(props: { title: string; icon: Icon; message: string }) {
+  return (
+    <Action
+      title={props.title}
+      icon={props.icon}
+      onAction={() =>
+        void showToast({ style: Toast.Style.Failure, title: props.message })
+      }
+    />
+  );
+}
+
+/** Result screen: the request runs in useEffect; see ViewState for the states. */
 function ResultView({ input }: { input: string }) {
   const [state, setState] = useState<ViewState>({ status: "loading" });
+  const [explaining, setExplaining] = useState<ExplainState>({
+    status: "idle",
+  });
+  const explainAbort = useRef<AbortController | undefined>(undefined);
+  const [mode] = useState(resolveMode);
+  const [provider] = useState(() => resolveOptions().provider);
 
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
+    const seen: { progress?: TranslateProgress } = {};
+    const throttle = createThrottle<TranslateProgress>((progress) => {
+      if (!cancelled) {
+        setState({ status: "streaming", progress });
+      }
+    }, RENDER_MS);
     setState({ status: "loading" });
 
     (async () => {
       try {
-        const result = await translate(input, {
-          ...resolveOptions(),
-          signal: controller.signal,
-        });
+        const result = await translate(
+          input,
+          {
+            ...resolveOptions(),
+            signal: controller.signal,
+            onUpdate: (progress) => {
+              seen.progress = progress;
+              // All-at-once renders once, at the end.
+              if (mode !== "all" && progress.translation !== "") {
+                throttle.push(progress);
+              }
+            },
+          },
+          mode === "onDemand" ? "translation" : "full",
+        );
+        throttle.cancel();
         if (!cancelled) {
           setState({ status: "ok", result });
         }
       } catch (raw) {
+        throttle.cancel();
         if (cancelled) {
           return;
         }
         const error = asProviderError(raw);
+        void showFailureToast(error, { title: errorTitle(error, provider) });
+        const shown = seen.progress;
+        if (shown && shown.translation !== "") {
+          // Keep what arrived (even a partial translation), note the failure.
+          const result: TranslateResult = {
+            translation: shown.translation,
+            explanation: mode === "onDemand" ? null : shown.explanation || null,
+            cutShort: null,
+          };
+          setState({ status: "ok", result, failure: error });
+          return;
+        }
         setState({ status: "error", error });
-        void showFailureToast(error, { title: errorTitle(error) });
       }
     })();
 
     return () => {
       cancelled = true;
+      throttle.cancel();
       controller.abort();
     };
-  }, [input]);
+  }, [input, mode, provider]);
 
-  if (state.status === "loading") {
-    const quoted = defangImages(input).replace(/\n/g, "\n> ");
-    return (
-      <Detail
-        isLoading
-        navigationTitle="Polyglot"
-        markdown={`> ${quoted}\n\n_Translating…_`}
-      />
-    );
-  }
+  // Leaving the screen aborts an in-flight explain request too.
+  useEffect(() => () => explainAbort.current?.abort(), []);
+
+  const runExplain = (translation: string) => {
+    explainAbort.current?.abort();
+    const controller = new AbortController();
+    explainAbort.current = controller;
+    const partial = { text: "" };
+    const throttle = createThrottle<string>((text) => {
+      if (!controller.signal.aborted) {
+        setExplaining({ status: "running", partial: text });
+      }
+    }, RENDER_MS);
+    setExplaining({ status: "running", partial: "" });
+
+    (async () => {
+      try {
+        const result = await explain(input, translation, {
+          ...resolveOptions(),
+          signal: controller.signal,
+          onUpdate: (progress) => {
+            partial.text = progress.explanation ?? "";
+            throttle.push(partial.text);
+          },
+        });
+        throttle.cancel();
+        if (!controller.signal.aborted) {
+          setExplaining({ status: "done", result });
+        }
+      } catch (raw) {
+        throttle.cancel();
+        if (controller.signal.aborted) {
+          return;
+        }
+        const error = asProviderError(raw);
+        setExplaining({ status: "error", error, partial: partial.text });
+        void showFailureToast(error, { title: errorTitle(error, provider) });
+      }
+    })();
+  };
+
+  const preferencesAction = (
+    <Action
+      title="Open Extension Preferences"
+      icon={Icon.Gear}
+      onAction={openExtensionPreferences}
+    />
+  );
 
   if (state.status === "error") {
     const { error } = state;
+    const info = PROVIDERS[provider];
     return (
       <Detail
         navigationTitle="Polyglot — error"
-        markdown={errorMarkdown(error)}
+        markdown={errorMarkdown(error, provider)}
         actions={
           <ActionPanel>
-            <Action
-              title="Open Extension Preferences"
-              icon={Icon.Gear}
-              onAction={openExtensionPreferences}
-            />
+            {preferencesAction}
             {error.kind === "auth" && (
               <Action.OpenInBrowser
-                title="Get a Free Key (AI Studio)"
-                url={API_KEY_URL}
+                title={info.keyAction}
+                url={info.keyUrl}
                 icon={Icon.Key}
               />
             )}
@@ -166,24 +356,124 @@ function ResultView({ input }: { input: string }) {
     );
   }
 
-  const { result } = state;
-  const composed = composeResult(result);
+  // Every other state keeps the same action slots: ↵ is "Explain" in on-demand
+  // mode and "Copy Result" otherwise, ⌘↵ is "Copy Translation Only". While an
+  // action can't run yet it stays in its slot and only shows a toast.
+  const result = state.status === "ok" ? state.result : undefined;
+  const progress = state.status === "streaming" ? state.progress : undefined;
+  const translation = result?.translation ?? progress?.translation ?? "";
+  const translationFinal =
+    result !== undefined || Boolean(progress?.translationDone);
+
+  let markdown: string;
+  if (state.status === "loading") {
+    const quoted = input.replace(/\n/g, "\n> ");
+    markdown = `> ${quoted}\n\n_Translating…_`;
+  } else if (progress) {
+    const streamingBlock =
+      progress.translationDone && mode !== "onDemand"
+        ? `${SEPARATOR}${progress.explanation || EXPLAINING}`
+        : "";
+    markdown = `${progress.translation}${streamingBlock}`;
+  } else {
+    const notes = joinParts([
+      result?.cutShort
+        ? cutShortNote(
+            mode === "onDemand" ? "Translation" : "Response",
+            result.cutShort,
+          )
+        : "",
+      state.status === "ok" && state.failure
+        ? interruptedNote(state.failure)
+        : "",
+    ]);
+    markdown =
+      mode === "onDemand"
+        ? joinParts([
+            translation,
+            notes,
+            `---\n\n${explainTail(explaining, provider)}`,
+          ])
+        : joinParts([
+            composeResult(translation, result?.explanation ?? null),
+            notes,
+          ]);
+  }
+
+  const explained =
+    explaining.status === "done" ? explaining.result.explanation : null;
+  const copyContent = composeResult(
+    translation,
+    mode === "onDemand" ? explained : (result?.explanation ?? null),
+  );
+
+  const primaryAction = () => {
+    if (mode !== "onDemand") {
+      return result ? (
+        <Action.CopyToClipboard title="Copy Result" content={copyContent} />
+      ) : (
+        <NotYetAction
+          title="Copy Result"
+          icon={Icon.Clipboard}
+          message="Still translating — wait for the full result"
+        />
+      );
+    }
+    if (!result) {
+      return (
+        <NotYetAction
+          title="Explain"
+          icon={Icon.Book}
+          message="Wait for the translation to finish"
+        />
+      );
+    }
+    if (explaining.status === "running" || explaining.status === "done") {
+      const message =
+        explaining.status === "running"
+          ? "Already explaining…"
+          : "Already explained";
+      return (
+        <NotYetAction title="Explain" icon={Icon.Book} message={message} />
+      );
+    }
+    return (
+      <Action
+        title={explaining.status === "error" ? "Retry Explanation" : "Explain"}
+        icon={Icon.Book}
+        onAction={() => runExplain(result.translation)}
+      />
+    );
+  };
+
   return (
     <Detail
+      isLoading={state.status !== "ok" || explaining.status === "running"}
       navigationTitle="Polyglot"
-      markdown={defangImages(composed)}
+      markdown={defangImages(markdown)}
       actions={
         <ActionPanel>
-          <Action.CopyToClipboard title="Copy Result" content={composed} />
-          <Action.CopyToClipboard
-            title="Copy Translation Only"
-            content={result.translation}
-          />
-          <Action
-            title="Open Extension Preferences"
-            icon={Icon.Gear}
-            onAction={openExtensionPreferences}
-          />
+          {primaryAction()}
+          {translationFinal ? (
+            <Action.CopyToClipboard
+              title="Copy Translation Only"
+              content={translation}
+            />
+          ) : (
+            <NotYetAction
+              title="Copy Translation Only"
+              icon={Icon.Clipboard}
+              message="The translation is still streaming"
+            />
+          )}
+          {mode === "onDemand" && explaining.status === "done" && (
+            <Action.CopyToClipboard
+              title="Copy Result"
+              content={copyContent}
+              shortcut={{ modifiers: ["cmd", "shift"], key: "return" }}
+            />
+          )}
+          {preferencesAction}
         </ActionPanel>
       }
     />
