@@ -128,7 +128,7 @@ function errorHint(error: ProviderError, provider: ProviderId): string {
     case "rateLimit":
       return "Too many requests. Wait a few seconds and try again.";
     case "timeout":
-      return `${label} stopped sending data. Check your connection or try again.`;
+      return `${label} stopped sending data (it gets up to 60 s for the first data, then 30 s between chunks). Check your connection or try again.`;
     case "network":
       return `Could not reach ${label}. Check your internet connection.`;
     case "parse":
@@ -428,7 +428,14 @@ function ResultView({ input }: { input: string }) {
         />
       );
     }
-    if (explaining.status === "running" || explaining.status === "done") {
+    // A cut-short explanation can be retried; a whole one is final.
+    const retry =
+      explaining.status === "error" ||
+      (explaining.status === "done" && explaining.result.cutShort !== null);
+    if (
+      explaining.status === "running" ||
+      (explaining.status === "done" && !retry)
+    ) {
       const message =
         explaining.status === "running"
           ? "Already explaining…"
@@ -439,7 +446,7 @@ function ResultView({ input }: { input: string }) {
     }
     return (
       <Action
-        title={explaining.status === "error" ? "Retry Explanation" : "Explain"}
+        title={retry ? "Retry Explanation" : "Explain"}
         icon={Icon.Book}
         onAction={() => runExplain(result.translation)}
       />

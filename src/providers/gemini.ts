@@ -167,12 +167,21 @@ async function streamGemini(
       reason = chunk.reason ?? reason;
     },
   });
-  emptyGuard(text);
   // The last chunk carries finishReason; a stream that ended without one was cut.
   if (reason === undefined) {
+    emptyGuard(text);
     return { text, finish: "other", reason: "stream ended early" };
   }
-  return { text, finish: finishFrom(reason), reason };
+  const finish = finishFrom(reason);
+  // A finish reason explains an empty reply better than "empty response".
+  if (finish !== "done" && text.trim() === "") {
+    throw new ProviderError(
+      "api",
+      `Gemini stopped early (${reason}) before producing any text.`,
+    );
+  }
+  emptyGuard(text);
+  return { text, finish, reason };
 }
 
 export const gemini: Backend = { stream: streamGemini };

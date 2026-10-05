@@ -229,15 +229,15 @@ The **Always Explain** checkbox forces a block even on simple phrases.
   (the "no block when not needed" rules don't apply — you asked) and streams it in under the
   translation. Enter stays **Explain** throughout — pressed while the translation is still
   arriving, while explaining, or after the block is there, it only shows a toast. Copying moves to
-  `⌘⏎` (**Copy Translation Only**) and, once explained, `⌘⇧⏎` (**Copy Result**).
+  `⌘⏎` (**Copy Translation Only**) and, once explained, `⌘⇧⏎` (**Copy Result**). If the
+  explanation came back cut short, Enter becomes **Retry Explanation**.
 
 If a response is cut short (output-token cap, content filter, a dropped connection, a timeout)
 the screen keeps whatever text already arrived and adds a note saying so; only a failure before
 any text arrived shows the error screen. A connection lost mid-response is reported as such,
 with a note that the text above is incomplete. There is no total time limit: a request times out
-only when no data arrives — up to 60 s for the response to start, then up to 60 s more for its
-first chunk (thinking time; both estimates), then 30 s between chunks — so a long, healthy
-stream is never cut. Proofread streams the same way, but nothing is
+only when no data arrives — up to 60 s for the first data, then 30 s between chunks (both
+estimates) — so a long, healthy stream is never cut. Proofread streams the same way, but nothing is
 pasted until the whole text has arrived and finished normally.
 
 ## Testing the logic without the UI (eval harness)

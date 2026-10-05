@@ -60,6 +60,13 @@ function failedError(body: ResponseBody | undefined): ProviderError {
   );
 }
 
+function stoppedEarly(reason: string): ProviderError {
+  return new ProviderError(
+    "api",
+    `OpenAI stopped early (${reason}) before producing any text.`,
+  );
+}
+
 function refusalError(): ProviderError {
   return new ProviderError("api", "OpenAI refused the request.");
 }
@@ -169,10 +176,15 @@ async function streamOpenAI(
   } catch (error) {
     throw withEffortHint(error, args.opts.model);
   }
-  emptyGuard(text);
   if (!state.finish) {
+    emptyGuard(text);
     return { text, finish: "other", reason: "stream ended early" };
   }
+  // A terminal state explains an empty reply better than "empty response".
+  if (state.finish !== "done" && text.trim() === "") {
+    throw stoppedEarly(state.reason ?? state.finish);
+  }
+  emptyGuard(text);
   return { text, finish: state.finish, reason: state.reason };
 }
 

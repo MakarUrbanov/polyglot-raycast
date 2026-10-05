@@ -78,8 +78,8 @@ function failureFrom(
 /**
  * POST and read the response as server-sent events. There is no total time
  * cap: a healthy long stream keeps going. Only silence aborts it as a timeout —
- * `firstByteMs` until the first body byte (re-armed when the headers arrive),
- * then `idleMs` between chunks.
+ * one `firstByteMs` window from the request start to the first body chunk
+ * (headers do not restart it), then `idleMs` between chunks.
  */
 export async function postStream(args: PostStreamArgs): Promise<void> {
   const {
@@ -116,7 +116,6 @@ export async function postStream(args: PostStreamArgs): Promise<void> {
     } catch (cause) {
       throw failureFrom(cause, label, signal, idleController, timeoutText);
     }
-    arm(firstByteMs);
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");

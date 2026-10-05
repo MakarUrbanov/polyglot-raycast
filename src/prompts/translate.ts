@@ -17,7 +17,7 @@
 
 import { DEFUSED_MARK, EXPLANATION_MARK } from "../lib/parse";
 import type { TranslateOptions, TranslatePart } from "../providers/types";
-import { wrapInput } from "./shared";
+import { escapeClosingTag, wrapInput } from "./shared";
 
 export type PromptParams = Pick<
   TranslateOptions,
@@ -166,10 +166,7 @@ export function buildExplainUserPrompt(
   input: string,
   translation: string,
 ): string {
-  const safe = defuseMark(translation).replace(
-    /<\/translation>/gi,
-    "<\\/translation>",
-  );
+  const safe = escapeClosingTag(defuseMark(translation), "translation");
   return [
     "Write the explanation block for the text inside <input></input> and its translation inside <translation></translation>, following every rule above.",
     "Output ONLY the block — no preamble, no code fences.",
